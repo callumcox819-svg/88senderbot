@@ -43,6 +43,8 @@ ADMIN_ID = int(os.environ["ADMIN_ID"])
 def main_menu():
     current = db.get_setting("sender_name").strip()
     label = f"ИМЯ ОТПРАВИТЕЛЯ: {current}" if current else "ИМЯ ОТПРАВИТЕЛЯ"
+    subject = db.get_setting("mail_subject").strip()
+    subject_label = f"Тема письма: {subject[:40]}" if subject else "Тема письма"
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("Аккаунты", callback_data="accounts")],
@@ -50,6 +52,7 @@ def main_menu():
             [InlineKeyboardButton("Пресеты", callback_data="replies")],
             [InlineKeyboardButton("Прокси", callback_data="proxies")],
             [InlineKeyboardButton(label, callback_data="sender_name")],
+            [InlineKeyboardButton(subject_label, callback_data="mail_subject")],
             [InlineKeyboardButton("Отправить письмо", callback_data="send")],
         ]
     )
@@ -257,9 +260,18 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ADD_ACCOUNT
     if data == "sender_name":
         context.user_data["name_account_id"] = None
+        context.user_data["setting_key"] = "sender_name"
         current = db.get_setting("sender_name").strip() or "не задано"
         await query.edit_message_text(
             f"Сейчас: {current}\nПришли имя. Оно будет в поле «От» у писем с любого ящика."
+        )
+        return SET_NAME
+    if data == "mail_subject":
+        context.user_data["name_account_id"] = None
+        context.user_data["setting_key"] = "mail_subject"
+        current = db.get_setting("mail_subject").strip() or "название товара"
+        await query.edit_message_text(
+            f"Сейчас: {current}\nПришли тему. Она будет у каждого исходящего письма. OFFER заменится на название товара."
         )
         return SET_NAME
     if data.startswith("acc_name:"):
@@ -313,8 +325,13 @@ async def on_sender_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     account_id = context.user_data.get("name_account_id")
     if account_id:
         db.set_display_name(account_id, name)
-    else:
-        db.set_setting("sender_name", name)
+        await update.message.reply_text(f"Имя отправителя: {name}", reply_markup=main_menu())
+        return ConversationHandler.END
+    if context.user_data.get("setting_key") == "mail_subject":
+        db.set_setting("mail_subject", name)
+        await update.message.reply_text(f"Тема письма: {name}", reply_markup=main_menu())
+        return ConversationHandler.END
+    db.set_setting("sender_name", name)
     await update.message.reply_text(f"Имя отправителя: {name}", reply_markup=main_menu())
     return ConversationHandler.END
 
@@ -441,7 +458,8 @@ async def on_send_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     offer = (update.message.text or "").strip()
     account = db.get_account(context.user_data["account_id"])
-    subject = apply_offer(context.user_data["preset_subject"], offer)
+    subject_template = db.get_setting("mail_subject").strip() or context.user_data["preset_subject"]
+    subject = apply_offer(subject_template, offer)
     body = apply_offer(context.user_data["preset_body"], offer)
     to_addr = context.user_data["to"]
     try:
