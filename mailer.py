@@ -88,6 +88,29 @@ def check_proxy(proxy) -> None:
         sock.close()
 
 
+def _socks_connection(proxy, dest, timeout):
+    return socks.create_connection(
+        dest,
+        timeout=timeout,
+        proxy_type=_socks_kind(proxy["kind"]),
+        proxy_addr=proxy["host"],
+        proxy_port=int(proxy["port"]),
+        proxy_username=proxy.get("username") or None,
+        proxy_password=proxy.get("password") or None,
+        proxy_rdns=True,
+    )
+
+
+class _ProxySMTP(smtplib.SMTP_SSL):
+    def __init__(self, host, proxy, timeout=30, context=None):
+        self._proxy = proxy
+        super().__init__(host, 465, timeout=timeout, context=context)
+
+    def _get_socket(self, host, port, timeout):
+        raw = _socks_connection(self._proxy, (host, port), timeout)
+        return self.context.wrap_socket(raw, server_hostname=host)
+
+
 def send_mail(account, to_addr: str, subject: str, body: str, proxy=None, sender_name=None) -> None:
     if not proxy:
         raise RuntimeError("Нет активного прокси. Письмо не отправлено.")
@@ -99,13 +122,9 @@ def send_mail(account, to_addr: str, subject: str, body: str, proxy=None, sender
     msg.set_content(body)
 
     context = ssl.create_default_context()
-    with via_proxy(proxy):
-        with smtplib.SMTP(account["smtp_host"], account["smtp_port"], timeout=30) as smtp:
-            smtp.ehlo()
-            smtp.starttls(context=context)
-            smtp.ehlo()
-            smtp.login(account["email"], account["password"])
-            smtp.send_message(msg)
+    with _ProxySMTP(account["smtp_host"], proxy, timeout=30, context=context) as smtp:
+        smtp.login(account["email"], account["password"])
+        smtp.send_message(msg)
 
 
 def _decode(value: str | None) -> str:
