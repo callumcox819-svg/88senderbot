@@ -122,13 +122,17 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     if data == "presets":
         rows = db.list_presets()
-        lines = [f"{r['id']}. {r['subject']}" for r in rows] or ["Пока пусто."]
+        lines = []
+        for r in rows:
+            preview = " ".join((r["body"] or "").split())[:40]
+            lines.append(f"{r['id']}. {r['subject']} — {preview}")
         kb = [
             [InlineKeyboardButton("Новый пресет", callback_data="pre_add")],
             *[[InlineKeyboardButton(f"Удалить #{r['id']}", callback_data=f"pre_del:{r['id']}")] for r in rows],
             [InlineKeyboardButton("Назад", callback_data="home")],
         ]
-        await query.edit_message_text("Умные пресеты:\n" + "\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
+        head = "Умные пресеты. При отправке бот сам выбирает один.\n" if rows else "Умные пресеты:\n"
+        await query.edit_message_text(head + ("\n".join(lines) if lines else "Пока пусто."), reply_markup=InlineKeyboardMarkup(kb))
         return ConversationHandler.END
     if data == "send":
         if not db.list_accounts():
@@ -398,15 +402,28 @@ async def on_preset_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
     context.user_data["subject"] = (update.message.text or "").strip()
-    await update.message.reply_text("Текст письма. OFFER заменится на название товара.")
+    await update.message.reply_text(
+        "Текст письма. OFFER заменится на название товара.\n\n"
+        "Несколько вариантов — в одном сообщении, между ними строка ---\n"
+        "При отправке бот сам выберет один."
+    )
     return ADD_PRESET_BODY
 
 
 async def on_preset_body(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
-    db.add_preset(context.user_data["subject"], (update.message.text or "").strip())
-    await update.message.reply_text("Пресет сохранён.", reply_markup=main_menu())
+    bodies = [part.strip() for part in re.split(r"(?m)^---\s*$", update.message.text or "") if part.strip()]
+    if not bodies:
+        await update.message.reply_text("Текст пустой. Пришли варианты ещё раз.")
+        return ADD_PRESET_BODY
+    subject = context.user_data["subject"]
+    for body in bodies:
+        db.add_preset(subject, body)
+    await update.message.reply_text(
+        f"Сохранено вариантов: {len(bodies)}. При отправке бот выберет один случайно.",
+        reply_markup=main_menu(),
+    )
     return ConversationHandler.END
 
 
