@@ -85,6 +85,18 @@ def init() -> None:
                 body TEXT NOT NULL
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS proxies (
+                id SERIAL PRIMARY KEY,
+                raw TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                host TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                username TEXT,
+                password TEXT,
+                active INTEGER NOT NULL DEFAULT 0
+            )
+            """,
         ]
         conn = connect()
         try:
@@ -124,6 +136,16 @@ def init() -> None:
                 sender TEXT NOT NULL,
                 subject TEXT NOT NULL,
                 body TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS proxies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                raw TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                host TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                username TEXT,
+                password TEXT,
+                active INTEGER NOT NULL DEFAULT 0
             );
             """
         )
@@ -199,3 +221,35 @@ def save_inbox(account_id: int, sender: str, subject: str, body: str) -> int:
 
 def get_inbox(inbox_id: int):
     return _exec("SELECT * FROM inbox WHERE id=?", (inbox_id,), fetch="one")
+
+
+def add_proxy(raw, kind, host, port, username, password) -> None:
+    _exec("UPDATE proxies SET active=0")
+    _exec(
+        """
+        INSERT INTO proxies (raw, kind, host, port, username, password, active)
+        VALUES (?, ?, ?, ?, ?, ?, 1)
+        """,
+        (raw, kind, host, port, username, password),
+    )
+
+
+def list_proxies():
+    return _exec("SELECT * FROM proxies ORDER BY id", fetch="all")
+
+
+def get_proxy(proxy_id: int):
+    return _exec("SELECT * FROM proxies WHERE id=?", (proxy_id,), fetch="one")
+
+
+def get_active_proxy():
+    return _exec("SELECT * FROM proxies WHERE active=1 ORDER BY id DESC", fetch="one")
+
+
+def activate_proxy(proxy_id: int) -> None:
+    _exec("UPDATE proxies SET active=0")
+    _exec("UPDATE proxies SET active=1 WHERE id=?", (proxy_id,))
+
+
+def delete_proxy(proxy_id: int) -> None:
+    _exec("DELETE FROM proxies WHERE id=?", (proxy_id,))

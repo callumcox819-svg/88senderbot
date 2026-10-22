@@ -36,16 +36,36 @@ ADMIN_ID = int(os.environ["ADMIN_ID"])
     SEND_OFFER,
     REPLY_OFFER,
     REPLY_MANUAL,
-) = range(9)
+    ADD_PROXY,
+) = range(10)
 
 MAIN = InlineKeyboardMarkup(
     [
         [InlineKeyboardButton("Аккаунты", callback_data="accounts")],
         [InlineKeyboardButton("Умные пресеты", callback_data="presets")],
         [InlineKeyboardButton("Пресеты", callback_data="replies")],
+        [InlineKeyboardButton("Прокси", callback_data="proxies")],
         [InlineKeyboardButton("Отправить письмо", callback_data="send")],
     ]
 )
+
+
+def proxy_keyboard():
+    rows = db.list_proxies() or []
+    kb = []
+    for row in rows:
+        mark = "● " if row["active"] else ""
+        kb.append([InlineKeyboardButton(f"{mark}{row['host']}:{row['port']}", callback_data=f"px_use:{row['id']}")])
+        kb.append(
+            [
+                InlineKeyboardButton("Проверить", callback_data=f"px_check:{row['id']}"),
+                InlineKeyboardButton("Удалить", callback_data=f"px_del:{row['id']}"),
+            ]
+        )
+    kb.append([InlineKeyboardButton("Добавить прокси", callback_data="px_add")])
+    kb.append([InlineKeyboardButton("Назад", callback_data="home")])
+    text = "Прокси нет." if not rows else "Список прокси. Точка — тот, через который идёт почта."
+    return text, InlineKeyboardMarkup(kb)
 
 
 def only_admin(update: Update) -> bool:
@@ -177,6 +197,37 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             log.exception("reply failed")
             await query.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=MAIN)
         return ConversationHandler.END
+    if data == "proxies":
+        text, kb = proxy_keyboard()
+        await query.edit_message_text(text, reply_markup=kb)
+        return ConversationHandler.END
+    if data == "px_add":
+        await query.edit_message_text(
+            "Пришли прокси. Перед сохранением проверю соединение с Gmail.\n"
+            "Формат: host:port, host:port:user:pass или socks5://user:pass@host:port"
+        )
+        return ADD_PROXY
+    if data.startswith("px_del:"):
+        db.delete_proxy(int(data.split(":")[1]))
+        text, kb = proxy_keyboard()
+        await query.edit_message_text("Прокси удалён.\n\n" + text, reply_markup=kb)
+        return ConversationHandler.END
+    if data.startswith("px_use:"):
+        db.activate_proxy(int(data.split(":")[1]))
+        text, kb = proxy_keyboard()
+        await query.edit_message_text(text, reply_markup=kb)
+        return ConversationHandler.END
+    if data.startswith("px_check:"):
+        proxy = db.get_proxy(int(data.split(":")[1]))
+        await query.edit_message_text(f"Проверяю {proxy['host']}:{proxy['port']}…")
+        try:
+            await asyncio.to_thread(mailer.check_proxy, proxy)
+            note = "Прокси отвечает."
+        except Exception as exc:
+            note = f"Прокси не работает: {exc}"
+        text, kb = proxy_keyboard()
+        await query.edit_message_text(note + "\n\n" + text, reply_markup=kb)
+        return ConversationHandler.END
     if data == "acc_add":
         await query.edit_message_text(
             "Пришли Gmail одной строкой:\nлогин:пароль_приложения\n\n"
@@ -209,6 +260,25 @@ async def on_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def on_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not only_admin(update):
+        return ConversationHandler.END
+    raw = (update.message.text or "").strip()
+    try:
+        parsed = mailer.parse_proxy(raw)
+        await update.message.reply_text("Проверяю прокси…")
+        await asyncio.to_thread(mailer.check_proxy, parsed)
+    except Exception as exc:
+        await update.message.reply_text(f"Не добавил: {exc}", reply_markup=MAIN)
+        return ConversationHandler.END
+    db.add_proxy(raw, parsed["kind"], parsed["host"], parsed["port"], parsed["username"], parsed["password"])
+    await update.message.reply_text(
+        f"Прокси {parsed['host']}:{parsed['port']} работает и теперь используется для почты.",
+        reply_markup=MAIN,
+    )
+    return ConversationHandler.END
+
+
 async def on_reply_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
@@ -233,7 +303,7 @@ async def _send_reply(message, context, offer: str):
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
     body = apply_offer(reply["body"], offer) if offer else reply["body"]
-    await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body)
+    await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, db.get_active_proxy())
     await message.reply_text(
         f"Ответ «{reply['title']}» ушёл с {account['email']} на {letter['sender']}",
         reply_markup=MAIN,
@@ -250,7 +320,7 @@ async def on_reply_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subject = f"Re: {subject}"
     body = (update.message.text or "").strip()
     try:
-        await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body)
+        await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, db.get_active_proxy())
     except Exception as exc:
         log.exception("manual reply failed")
         await update.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=MAIN)
@@ -316,7 +386,7 @@ async def on_send_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     body = apply_offer(context.user_data["preset_body"], offer)
     to_addr = context.user_data["to"]
     try:
-        await asyncio.to_thread(mailer.send_mail, account, to_addr, subject, body)
+        await asyncio.to_thread(mailer.send_mail, account, to_addr, subject, body, db.get_active_proxy())
     except Exception as exc:
         log.exception("send failed")
         await update.message.reply_text(f"Не отправилось: {exc}", reply_markup=MAIN)
@@ -350,6 +420,7 @@ def main():
             SEND_OFFER: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_send_offer)],
             REPLY_OFFER: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_reply_offer)],
             REPLY_MANUAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_reply_manual)],
+            ADD_PROXY: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_proxy)],
         },
         fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
         per_message=False,
