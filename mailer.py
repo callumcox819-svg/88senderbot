@@ -85,9 +85,9 @@ def check_proxy(proxy) -> None:
         sock.close()
 
 
-def send_mail(account, to_addr: str, subject: str, body: str, proxy=None) -> None:
+def send_mail(account, to_addr: str, subject: str, body: str, proxy=None, sender_name=None) -> None:
     msg = EmailMessage()
-    sender_name = (account["display_name"] or "").strip()
+    sender_name = (sender_name if sender_name is not None else account["display_name"] or "").strip()
     msg["From"] = formataddr((sender_name, account["email"])) if sender_name else account["email"]
     msg["To"] = to_addr
     msg["Subject"] = subject

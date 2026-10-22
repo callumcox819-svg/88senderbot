@@ -40,15 +40,19 @@ ADMIN_ID = int(os.environ["ADMIN_ID"])
     SET_NAME,
 ) = range(11)
 
-MAIN = InlineKeyboardMarkup(
-    [
-        [InlineKeyboardButton("Аккаунты", callback_data="accounts")],
-        [InlineKeyboardButton("Умные пресеты", callback_data="presets")],
-        [InlineKeyboardButton("Пресеты", callback_data="replies")],
-        [InlineKeyboardButton("Прокси", callback_data="proxies")],
-        [InlineKeyboardButton("Отправить письмо", callback_data="send")],
-    ]
-)
+def main_menu():
+    current = db.get_setting("sender_name").strip()
+    label = f"ИМЯ ОТПРАВИТЕЛЯ: {current}" if current else "ИМЯ ОТПРАВИТЕЛЯ"
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Аккаунты", callback_data="accounts")],
+            [InlineKeyboardButton("Умные пресеты", callback_data="presets")],
+            [InlineKeyboardButton("Пресеты", callback_data="replies")],
+            [InlineKeyboardButton("Прокси", callback_data="proxies")],
+            [InlineKeyboardButton(label, callback_data="sender_name")],
+            [InlineKeyboardButton("Отправить письмо", callback_data="send")],
+        ]
+    )
 
 
 def proxy_keyboard():
@@ -78,12 +82,16 @@ def apply_offer(text: str, offer: str) -> str:
     return re.sub(r"OFFER", offer, text)
 
 
+def from_name():
+    return db.get_setting("sender_name").strip() or None
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return
     await update.effective_message.reply_text(
         "Почта в боте. Письмо уходит только туда, куда ты введёшь адрес вручную.",
-        reply_markup=MAIN,
+        reply_markup=main_menu(),
     )
     return ConversationHandler.END
 
@@ -95,7 +103,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     data = query.data
     if data == "home":
-        await query.edit_message_text("Меню.", reply_markup=MAIN)
+        await query.edit_message_text("Меню.", reply_markup=main_menu())
         return ConversationHandler.END
     if data == "accounts":
         rows = db.list_accounts()
@@ -124,10 +132,10 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     if data == "send":
         if not db.list_accounts():
-            await query.edit_message_text("Сначала добавь почту.", reply_markup=MAIN)
+            await query.edit_message_text("Сначала добавь почту.", reply_markup=main_menu())
             return ConversationHandler.END
         if not db.list_presets():
-            await query.edit_message_text("Сначала добавь пресет.", reply_markup=MAIN)
+            await query.edit_message_text("Сначала добавь пресет.", reply_markup=main_menu())
             return ConversationHandler.END
         accounts = db.list_accounts()
         kb = [[InlineKeyboardButton(r["email"], callback_data=f"acc_pick:{r['id']}")] for r in accounts]
@@ -136,11 +144,11 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     if data.startswith("acc_del:"):
         db.delete_account(int(data.split(":")[1]))
-        await query.edit_message_text("Аккаунт удалён.", reply_markup=MAIN)
+        await query.edit_message_text("Аккаунт удалён.", reply_markup=main_menu())
         return ConversationHandler.END
     if data.startswith("pre_del:"):
         db.delete_preset(int(data.split(":")[1]))
-        await query.edit_message_text("Пресет удалён.", reply_markup=MAIN)
+        await query.edit_message_text("Пресет удалён.", reply_markup=main_menu())
         return ConversationHandler.END
     if data == "replies":
         rows = db.list_replies()
@@ -157,7 +165,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     if data.startswith("rep_del:"):
         db.delete_reply(int(data.split(":")[1]))
-        await query.edit_message_text("Пресет ответа удалён.", reply_markup=MAIN)
+        await query.edit_message_text("Пресет ответа удалён.", reply_markup=main_menu())
         return ConversationHandler.END
     if data == "rep_add":
         await query.edit_message_text("Название кнопки. Например: Ещё продаётся")
@@ -166,7 +174,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         inbox_id = int(data.split(":")[1])
         letter = db.get_inbox(inbox_id)
         if not letter:
-            await query.edit_message_text("Письмо уже не найдено.", reply_markup=MAIN)
+            await query.edit_message_text("Письмо уже не найдено.", reply_markup=main_menu())
             return ConversationHandler.END
         rows = db.list_replies()
         kb = [[InlineKeyboardButton(r["title"], callback_data=f"use_rep:{inbox_id}:{r['id']}")] for r in rows]
@@ -180,7 +188,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         inbox_id = int(data.split(":")[1])
         letter = db.get_inbox(inbox_id)
         if not letter:
-            await query.edit_message_text("Письмо уже не найдено.", reply_markup=MAIN)
+            await query.edit_message_text("Письмо уже не найдено.", reply_markup=main_menu())
             return ConversationHandler.END
         context.user_data["reply_inbox_id"] = inbox_id
         await query.edit_message_text(f"Напиши текст ответа для {letter['sender']}. Он уйдёт как есть.")
@@ -190,7 +198,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         letter = db.get_inbox(int(inbox_id))
         reply = db.get_reply(int(reply_id))
         if not letter or not reply:
-            await query.edit_message_text("Письмо или пресет уже не найдены.", reply_markup=MAIN)
+            await query.edit_message_text("Письмо или пресет уже не найдены.", reply_markup=main_menu())
             return ConversationHandler.END
         context.user_data["reply_inbox_id"] = letter["id"]
         context.user_data["reply_id"] = reply["id"]
@@ -201,7 +209,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _send_reply(query.message, context, offer="")
         except Exception as exc:
             log.exception("reply failed")
-            await query.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=MAIN)
+            await query.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=main_menu())
         return ConversationHandler.END
     if data == "proxies":
         text, kb = proxy_keyboard()
@@ -239,10 +247,17 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Пришли один ящик или несколько, каждый с новой строки:\n"
             "логин:пароль_приложения\n"
             "логин:пароль:Имя отправителя\n\n"
-            "Имя можно не писать в строке и задать потом кнопкой «Имя» в списке аккаунтов.\n"
+            "Общее имя для всех ящиков задаётся кнопкой «ИМЯ ОТПРАВИТЕЛЯ» в меню.\n"
             "Порты Gmail подставятся сами."
         )
         return ADD_ACCOUNT
+    if data == "sender_name":
+        context.user_data["name_account_id"] = None
+        current = db.get_setting("sender_name").strip() or "не задано"
+        await query.edit_message_text(
+            f"Сейчас: {current}\nПришли имя. Оно будет в поле «От» у писем с любого ящика."
+        )
+        return SET_NAME
     if data.startswith("acc_name:"):
         context.user_data["name_account_id"] = int(data.split(":")[1])
         await query.edit_message_text("Напиши имя отправителя. Оно будет в поле «От» у писем с этого ящика.")
@@ -274,12 +289,12 @@ async def on_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.add_account(email, password, smtp_host, smtp_port, imap_host, imap_port, display_name)
         added.append(email)
     if not added:
-        await update.message.reply_text("Ни одной строки не разобрал. Формат: логин:пароль", reply_markup=MAIN)
+        await update.message.reply_text("Ни одной строки не разобрал. Формат: логин:пароль", reply_markup=main_menu())
         return ConversationHandler.END
     text = "Добавлены:\n" + "\n".join(added)
     if failed:
         text += "\n\nНе разобрал:\n" + "\n".join(failed)
-    await update.message.reply_text(text, reply_markup=MAIN)
+    await update.message.reply_text(text, reply_markup=main_menu())
     return ConversationHandler.END
 
 
@@ -287,8 +302,12 @@ async def on_sender_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
     name = (update.message.text or "").strip()
-    db.set_display_name(context.user_data["name_account_id"], name)
-    await update.message.reply_text(f"Имя отправителя: {name}", reply_markup=MAIN)
+    account_id = context.user_data.get("name_account_id")
+    if account_id:
+        db.set_display_name(account_id, name)
+    else:
+        db.set_setting("sender_name", name)
+    await update.message.reply_text(f"Имя отправителя: {name}", reply_markup=main_menu())
     return ConversationHandler.END
 
 
@@ -301,12 +320,12 @@ async def on_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Проверяю прокси…")
         await asyncio.to_thread(mailer.check_proxy, parsed)
     except Exception as exc:
-        await update.message.reply_text(f"Не добавил: {exc}", reply_markup=MAIN)
+        await update.message.reply_text(f"Не добавил: {exc}", reply_markup=main_menu())
         return ConversationHandler.END
     db.add_proxy(raw, parsed["kind"], parsed["host"], parsed["port"], parsed["username"], parsed["password"])
     await update.message.reply_text(
         f"Прокси {parsed['host']}:{parsed['port']} работает и теперь используется для почты.",
-        reply_markup=MAIN,
+        reply_markup=main_menu(),
     )
     return ConversationHandler.END
 
@@ -323,7 +342,7 @@ async def on_reply_body(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
     db.add_reply(context.user_data["reply_title"], (update.message.text or "").strip())
-    await update.message.reply_text("Пресет ответа сохранён. Его можно выбрать после кнопки «Написать».", reply_markup=MAIN)
+    await update.message.reply_text("Пресет ответа сохранён. Его можно выбрать после кнопки «Написать».", reply_markup=main_menu())
     return ConversationHandler.END
 
 
@@ -335,10 +354,10 @@ async def _send_reply(message, context, offer: str):
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
     body = apply_offer(reply["body"], offer) if offer else reply["body"]
-    await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, db.get_active_proxy())
+    await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, db.get_active_proxy(), from_name())
     await message.reply_text(
         f"Ответ «{reply['title']}» ушёл с {account['email']} на {letter['sender']}",
-        reply_markup=MAIN,
+        reply_markup=main_menu(),
     )
 
 
@@ -352,14 +371,14 @@ async def on_reply_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subject = f"Re: {subject}"
     body = (update.message.text or "").strip()
     try:
-        await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, db.get_active_proxy())
+        await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, db.get_active_proxy(), from_name())
     except Exception as exc:
         log.exception("manual reply failed")
-        await update.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=MAIN)
+        await update.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=main_menu())
         return ConversationHandler.END
     await update.message.reply_text(
         f"Ручной ответ ушёл с {account['email']} на {letter['sender']}",
-        reply_markup=MAIN,
+        reply_markup=main_menu(),
     )
     return ConversationHandler.END
 
@@ -371,7 +390,7 @@ async def on_reply_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_reply(update.message, context, offer=(update.message.text or "").strip())
     except Exception as exc:
         log.exception("reply failed")
-        await update.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=MAIN)
+        await update.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=main_menu())
     return ConversationHandler.END
 
 
@@ -387,7 +406,7 @@ async def on_preset_body(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
     db.add_preset(context.user_data["subject"], (update.message.text or "").strip())
-    await update.message.reply_text("Пресет сохранён.", reply_markup=MAIN)
+    await update.message.reply_text("Пресет сохранён.", reply_markup=main_menu())
     return ConversationHandler.END
 
 
@@ -418,20 +437,20 @@ async def on_send_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     body = apply_offer(context.user_data["preset_body"], offer)
     to_addr = context.user_data["to"]
     try:
-        await asyncio.to_thread(mailer.send_mail, account, to_addr, subject, body, db.get_active_proxy())
+        await asyncio.to_thread(mailer.send_mail, account, to_addr, subject, body, db.get_active_proxy(), from_name())
     except Exception as exc:
         log.exception("send failed")
-        await update.message.reply_text(f"Не отправилось: {exc}", reply_markup=MAIN)
+        await update.message.reply_text(f"Не отправилось: {exc}", reply_markup=main_menu())
         return ConversationHandler.END
     await update.message.reply_text(
         f"Отправлено с {account['email']} на {to_addr}\nТема: {subject}",
-        reply_markup=MAIN,
+        reply_markup=main_menu(),
     )
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Отменено.", reply_markup=MAIN)
+    await update.message.reply_text("Отменено.", reply_markup=main_menu())
     return ConversationHandler.END
 
 

@@ -103,6 +103,14 @@ def init() -> None:
             for statement in statements:
                 conn.execute(statement)
             conn.execute("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
             conn.commit()
         finally:
             conn.close()
@@ -148,6 +156,10 @@ def init() -> None:
                 password TEXT,
                 active INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
         try:
@@ -178,6 +190,18 @@ def add_account(email, password, smtp_host, smtp_port, imap_host, imap_port, dis
 
 def set_display_name(account_id: int, display_name: str) -> None:
     _exec("UPDATE accounts SET display_name=? WHERE id=?", (display_name, account_id))
+
+
+def get_setting(key: str, default: str = "") -> str:
+    row = _exec("SELECT value FROM settings WHERE key=?", (key,), fetch="one")
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    _exec(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
+    )
 
 
 def list_accounts():
