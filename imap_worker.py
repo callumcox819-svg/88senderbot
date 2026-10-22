@@ -33,33 +33,22 @@ async def loop():
                     own_name = (account["display_name"] or "").strip()
                     title = f"{sender_name} ({own_name})" if own_name else sender_name
                     lines = [
-                        f"⚡️ Получено сообщение на \"{escape(title)}\" {escape(account['email'])}",
+                        f"⚡️ Получено сообщение на \"{escape(title)}\"",
                         escape(account["email"]),
                         f"от \"{escape(sender_name)}\" {escape(sender_mail)}",
-                    ]
-                    if letter.get("mid"):
-                        lines += ["", f"ID: {escape(letter['mid'])}"]
-                    lines += [
                         "",
                         "Тема:",
-                        f"<blockquote>{escape(letter['subject'] or '(без темы)')}</blockquote>",
+                        f"<blockquote expandable>{escape(letter['subject'] or '(без темы)')}</blockquote>",
                         "Текст:",
-                        f"<blockquote>{escape(letter['body'] or '(пусто)')}</blockquote>",
+                        f"<blockquote expandable>{escape(letter['body'] or '(пусто)')}</blockquote>",
                     ]
                     text = "\n".join(lines)
                     kb = None
                     if letter["from"]:
                         kb = InlineKeyboardMarkup(
-                            [[InlineKeyboardButton("✍️ Написать ещё", callback_data=f"write:{inbox_id}")]]
+                            [[InlineKeyboardButton("Написать ещё", callback_data=f"write:{inbox_id}")]]
                         )
-                    reply_to = db.first_inbox_message(account["id"], letter["from"]) if letter["from"] else None
-                    kwargs = {"reply_markup": kb, "parse_mode": "HTML"}
-                    try:
-                        sent = await bot.send_message(
-                            ADMIN_ID, text[:4000], reply_to_message_id=reply_to, **kwargs
-                        )
-                    except Exception:
-                        sent = await bot.send_message(ADMIN_ID, text[:4000], **kwargs)
+                    sent = await bot.send_message(ADMIN_ID, text[:4000], reply_markup=kb, parse_mode="HTML")
                     db.set_inbox_message(inbox_id, sent.message_id)
             except Exception:
                 log.exception("imap %s", account["email"])
