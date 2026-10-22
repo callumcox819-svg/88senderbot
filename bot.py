@@ -1,0 +1,395 @@
+import asyncio
+import logging
+import os
+import random
+import re
+
+from dotenv import load_dotenv
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+
+import db
+import mailer
+
+load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("mailbot")
+
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+ADMIN_ID = int(os.environ["ADMIN_ID"])
+
+(
+    ADD_ACCOUNT,
+    ADD_PRESET_SUBJECT,
+    ADD_PRESET_BODY,
+    ADD_REPLY_TITLE,
+    ADD_REPLY_BODY,
+    SEND_TO,
+    SEND_OFFER,
+    REPLY_OFFER,
+    REPLY_MANUAL,
+) = range(9)
+
+MAIN = InlineKeyboardMarkup(
+    [
+        [InlineKeyboardButton("Аккаунты", callback_data="accounts")],
+        [InlineKeyboardButton("Умные пресеты", callback_data="presets")],
+        [InlineKeyboardButton("Пресеты", callback_data="replies")],
+        [InlineKeyboardButton("Отправить письмо", callback_data="send")],
+    ]
+)
+
+
+def only_admin(update: Update) -> bool:
+    user = update.effective_user
+    return bool(user and user.id == ADMIN_ID)
+
+
+def apply_offer(text: str, offer: str) -> str:
+    return re.sub(r"OFFER", offer, text)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not only_admin(update):
+        return
+    await update.effective_message.reply_text(
+        "Почта в боте. Письмо уходит только туда, куда ты введёшь адрес вручную.",
+        reply_markup=MAIN,
+    )
+    return ConversationHandler.END
+
+
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not only_admin(update):
+        return ConversationHandler.END
+    data = query.data
+    if data == "home":
+        await query.edit_message_text("Меню.", reply_markup=MAIN)
+        return ConversationHandler.END
+    if data == "accounts":
+        rows = db.list_accounts()
+        lines = [f"{r['id']}. {r['email']}" for r in rows] or ["Пока пусто."]
+        kb = [
+            [InlineKeyboardButton("Добавить логин:пароль", callback_data="acc_add")],
+            *[[InlineKeyboardButton(f"Удалить {r['email']}", callback_data=f"acc_del:{r['id']}")] for r in rows],
+            [InlineKeyboardButton("Назад", callback_data="home")],
+        ]
+        await query.edit_message_text("Аккаунты:\n" + "\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
+        return ConversationHandler.END
+    if data == "presets":
+        rows = db.list_presets()
+        lines = [f"{r['id']}. {r['subject']}" for r in rows] or ["Пока пусто."]
+        kb = [
+            [InlineKeyboardButton("Новый пресет", callback_data="pre_add")],
+            *[[InlineKeyboardButton(f"Удалить #{r['id']}", callback_data=f"pre_del:{r['id']}")] for r in rows],
+            [InlineKeyboardButton("Назад", callback_data="home")],
+        ]
+        await query.edit_message_text("Умные пресеты:\n" + "\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
+        return ConversationHandler.END
+    if data == "send":
+        if not db.list_accounts():
+            await query.edit_message_text("Сначала добавь почту.", reply_markup=MAIN)
+            return ConversationHandler.END
+        if not db.list_presets():
+            await query.edit_message_text("Сначала добавь пресет.", reply_markup=MAIN)
+            return ConversationHandler.END
+        accounts = db.list_accounts()
+        kb = [[InlineKeyboardButton(r["email"], callback_data=f"acc_pick:{r['id']}")] for r in accounts]
+        kb.append([InlineKeyboardButton("Назад", callback_data="home")])
+        await query.edit_message_text("С какого ящика отправить?", reply_markup=InlineKeyboardMarkup(kb))
+        return ConversationHandler.END
+    if data.startswith("acc_del:"):
+        db.delete_account(int(data.split(":")[1]))
+        await query.edit_message_text("Аккаунт удалён.", reply_markup=MAIN)
+        return ConversationHandler.END
+    if data.startswith("pre_del:"):
+        db.delete_preset(int(data.split(":")[1]))
+        await query.edit_message_text("Пресет удалён.", reply_markup=MAIN)
+        return ConversationHandler.END
+    if data == "replies":
+        rows = db.list_replies()
+        lines = [f"{r['id']}. {r['title']}" for r in rows] or ["Пока пусто."]
+        kb = [
+            [InlineKeyboardButton("Новый пресет ответа", callback_data="rep_add")],
+            *[[InlineKeyboardButton(f"Удалить #{r['id']} {r['title']}", callback_data=f"rep_del:{r['id']}")] for r in rows],
+            [InlineKeyboardButton("Назад", callback_data="home")],
+        ]
+        await query.edit_message_text(
+            "Пресеты ответа продавцу:\n" + "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
+        return ConversationHandler.END
+    if data.startswith("rep_del:"):
+        db.delete_reply(int(data.split(":")[1]))
+        await query.edit_message_text("Пресет ответа удалён.", reply_markup=MAIN)
+        return ConversationHandler.END
+    if data == "rep_add":
+        await query.edit_message_text("Название кнопки. Например: Ещё продаётся")
+        return ADD_REPLY_TITLE
+    if data.startswith("write:"):
+        inbox_id = int(data.split(":")[1])
+        letter = db.get_inbox(inbox_id)
+        if not letter:
+            await query.edit_message_text("Письмо уже не найдено.", reply_markup=MAIN)
+            return ConversationHandler.END
+        rows = db.list_replies()
+        kb = [[InlineKeyboardButton(r["title"], callback_data=f"use_rep:{inbox_id}:{r['id']}")] for r in rows]
+        kb.append([InlineKeyboardButton("Написать вручную", callback_data=f"manual:{inbox_id}")])
+        await query.edit_message_text(
+            f"Ответ для {letter['sender']}\nВыбери шаблон или напиши текст сам.",
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
+        return ConversationHandler.END
+    if data.startswith("manual:"):
+        inbox_id = int(data.split(":")[1])
+        letter = db.get_inbox(inbox_id)
+        if not letter:
+            await query.edit_message_text("Письмо уже не найдено.", reply_markup=MAIN)
+            return ConversationHandler.END
+        context.user_data["reply_inbox_id"] = inbox_id
+        await query.edit_message_text(f"Напиши текст ответа для {letter['sender']}. Он уйдёт как есть.")
+        return REPLY_MANUAL
+    if data.startswith("use_rep:"):
+        _, inbox_id, reply_id = data.split(":")
+        letter = db.get_inbox(int(inbox_id))
+        reply = db.get_reply(int(reply_id))
+        if not letter or not reply:
+            await query.edit_message_text("Письмо или пресет уже не найдены.", reply_markup=MAIN)
+            return ConversationHandler.END
+        context.user_data["reply_inbox_id"] = letter["id"]
+        context.user_data["reply_id"] = reply["id"]
+        if "OFFER" in reply["body"]:
+            await query.edit_message_text("ВВЕДИТЕ НАЗВАНИЕ ТОВАРА")
+            return REPLY_OFFER
+        try:
+            await _send_reply(query.message, context, offer="")
+        except Exception as exc:
+            log.exception("reply failed")
+            await query.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=MAIN)
+        return ConversationHandler.END
+    if data == "acc_add":
+        await query.edit_message_text(
+            "Пришли Gmail одной строкой:\nлогин:пароль_приложения\n\n"
+            "Порты Gmail подставятся сами: SMTP 587, IMAP 993."
+        )
+        return ADD_ACCOUNT
+    if data == "pre_add":
+        await query.edit_message_text("Тема письма. Можно использовать OFFER — туда встанет название товара.")
+        return ADD_PRESET_SUBJECT
+    if data.startswith("acc_pick:"):
+        context.user_data["account_id"] = int(data.split(":")[1])
+        await query.edit_message_text("Введите электронную почту, куда отправить письмо.")
+        return SEND_TO
+    return ConversationHandler.END
+
+
+async def on_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not only_admin(update):
+        return ConversationHandler.END
+    raw = (update.message.text or "").strip()
+    email, sep, password = raw.partition(":")
+    email, password = email.strip(), password.replace(" ", "").strip()
+    hosts = mailer.gmail_hosts(email)
+    if not sep or "@" not in email or not password or not hosts:
+        await update.message.reply_text("Нужен Gmail в формате логин:пароль", reply_markup=MAIN)
+        return ConversationHandler.END
+    smtp_host, smtp_port, imap_host, imap_port = hosts
+    db.add_account(email, password, smtp_host, smtp_port, imap_host, imap_port)
+    await update.message.reply_text(f"Добавлен {email}. Порты Gmail уже стоят.", reply_markup=MAIN)
+    return ConversationHandler.END
+
+
+async def on_reply_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not only_admin(update):
+        return ConversationHandler.END
+    context.user_data["reply_title"] = (update.message.text or "").strip()[:40]
+    await update.message.reply_text("Текст ответа продавцу. Если нужно название товара, вставь OFFER.")
+    return ADD_REPLY_BODY
+
+
+async def on_reply_body(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not only_admin(update):
+        return ConversationHandler.END
+    db.add_reply(context.user_data["reply_title"], (update.message.text or "").strip())
+    await update.message.reply_text("Пресет ответа сохранён. Его можно выбрать после кнопки «Написать».", reply_markup=MAIN)
+    return ConversationHandler.END
+
+
+async def _send_reply(message, context, offer: str):
+    letter = db.get_inbox(context.user_data["reply_inbox_id"])
+    reply = db.get_reply(context.user_data["reply_id"])
+    account = db.get_account(letter["account_id"])
+    subject = letter["subject"]
+    if not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}"
+    body = apply_offer(reply["body"], offer) if offer else reply["body"]
+    await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body)
+    await message.reply_text(
+        f"Ответ «{reply['title']}» ушёл с {account['email']} на {letter['sender']}",
+        reply_markup=MAIN,
+    )
+
+
+async def on_reply_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not only_admin(update):
+        return ConversationHandler.END
+    letter = db.get_inbox(context.user_data["reply_inbox_id"])
+    account = db.get_account(letter["account_id"])
+    subject = letter["subject"]
+    if not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}"
+    body = (update.message.text or "").strip()
+    try:
+        await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body)
+    except Exception as exc:
+        log.exception("manual reply failed")
+        await update.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=MAIN)
+        return ConversationHandler.END
+    await update.message.reply_text(
+        f"Ручной ответ ушёл с {account['email']} на {letter['sender']}",
+        reply_markup=MAIN,
+    )
+    return ConversationHandler.END
+
+
+async def on_reply_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not only_admin(update):
+        return ConversationHandler.END
+    try:
+        await _send_reply(update.message, context, offer=(update.message.text or "").strip())
+    except Exception as exc:
+        log.exception("reply failed")
+        await update.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=MAIN)
+    return ConversationHandler.END
+
+
+async def on_preset_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not only_admin(update):
+        return ConversationHandler.END
+    context.user_data["subject"] = (update.message.text or "").strip()
+    await update.message.reply_text("Текст письма. OFFER заменится на название товара.")
+    return ADD_PRESET_BODY
+
+
+async def on_preset_body(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not only_admin(update):
+        return ConversationHandler.END
+    db.add_preset(context.user_data["subject"], (update.message.text or "").strip())
+    await update.message.reply_text("Пресет сохранён.", reply_markup=MAIN)
+    return ConversationHandler.END
+
+
+async def on_send_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not only_admin(update):
+        return ConversationHandler.END
+    to_addr = (update.message.text or "").strip()
+    if "@" not in to_addr or " " in to_addr:
+        await update.message.reply_text("Это не похоже на один адрес. Введи email ещё раз.")
+        return SEND_TO
+    context.user_data["to"] = to_addr
+    preset = random.choice(db.list_presets())
+    context.user_data["preset_id"] = preset["id"]
+    context.user_data["preset_subject"] = preset["subject"]
+    context.user_data["preset_body"] = preset["body"]
+    await update.message.reply_text(
+        f"Шаблон #{preset['id']}: {preset['subject']}\n\nВВЕДИТЕ НАЗВАНИЕ ТОВАРА"
+    )
+    return SEND_OFFER
+
+
+async def on_send_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not only_admin(update):
+        return ConversationHandler.END
+    offer = (update.message.text or "").strip()
+    account = db.get_account(context.user_data["account_id"])
+    subject = apply_offer(context.user_data["preset_subject"], offer)
+    body = apply_offer(context.user_data["preset_body"], offer)
+    to_addr = context.user_data["to"]
+    try:
+        await asyncio.to_thread(mailer.send_mail, account, to_addr, subject, body)
+    except Exception as exc:
+        log.exception("send failed")
+        await update.message.reply_text(f"Не отправилось: {exc}", reply_markup=MAIN)
+        return ConversationHandler.END
+    await update.message.reply_text(
+        f"Отправлено с {account['email']} на {to_addr}\nТема: {subject}",
+        reply_markup=MAIN,
+    )
+    return ConversationHandler.END
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Отменено.", reply_markup=MAIN)
+    return ConversationHandler.END
+
+
+async def imap_loop(app: Application):
+    await asyncio.sleep(5)
+    while True:
+        for account in db.list_accounts():
+            try:
+                new_uid, letters = await asyncio.to_thread(mailer.fetch_new, account)
+                if new_uid != account["last_uid"]:
+                    db.set_last_uid(account["id"], new_uid)
+                for letter in letters:
+                    inbox_id = db.save_inbox(account["id"], letter["from"], letter["subject"], letter["body"])
+                    text = (
+                        f"Получено сообщение на {account['email']}\n"
+                        f"от {letter['from'] or 'неизвестного адреса'}\n\n"
+                        f"Тема:\n{letter['subject'] or '(без темы)'}\n\n"
+                        f"Текст:\n{letter['body'] or '(пусто)'}"
+                    )
+                    kb = None
+                    if letter["from"]:
+                        kb = InlineKeyboardMarkup(
+                            [[InlineKeyboardButton("Написать", callback_data=f"write:{inbox_id}")]]
+                        )
+                    await app.bot.send_message(ADMIN_ID, text[:4000], reply_markup=kb)
+            except Exception:
+                log.exception("imap %s", account["email"])
+        await asyncio.sleep(45)
+
+
+def main():
+    db.init()
+    conv = ConversationHandler(
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(menu),
+        ],
+        states={
+            ADD_ACCOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_account)],
+            ADD_PRESET_SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_preset_subject)],
+            ADD_PRESET_BODY: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_preset_body)],
+            ADD_REPLY_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_reply_title)],
+            ADD_REPLY_BODY: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_reply_body)],
+            SEND_TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_send_to)],
+            SEND_OFFER: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_send_offer)],
+            REPLY_OFFER: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_reply_offer)],
+            REPLY_MANUAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_reply_manual)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
+        per_message=False,
+    )
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(conv)
+
+    async def post_init(application: Application):
+        asyncio.create_task(imap_loop(application))
+
+    app.post_init = post_init
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()

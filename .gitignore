@@ -1,0 +1,6 @@
+.env
+mailer.db
+__pycache__/
+*.pyc
+.venv/
+venv/
