@@ -280,9 +280,9 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return SET_NAME
     if data == "pre_add":
         await query.edit_message_text(
-            "Пришли текст письма. OFFER заменится на название товара.\n\n"
-            "Несколько вариантов — в одном сообщении, между ними строка ---\n"
-            "При отправке бот сам выберет один. Тема письма будет названием товара."
+            "Пришли тексты, каждый вариант с новой строки.\n"
+            "OFFER заменится на название товара.\n"
+            "При отправке бот сам выберет одну строку."
         )
         return ADD_PRESET_BODY
     if data.startswith("acc_pick:"):
@@ -422,7 +422,11 @@ async def on_reply_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_preset_body(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
-    bodies = [part.strip() for part in re.split(r"(?m)^---\s*$", update.message.text or "") if part.strip()]
+    raw = update.message.text or ""
+    if re.search(r"(?m)^---\s*$", raw):
+        bodies = [part.strip() for part in re.split(r"(?m)^---\s*$", raw) if part.strip()]
+    else:
+        bodies = [line.strip() for line in raw.splitlines() if line.strip()]
     if not bodies:
         await update.message.reply_text("Текст пустой. Пришли варианты ещё раз.")
         return ADD_PRESET_BODY
