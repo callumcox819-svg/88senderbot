@@ -102,6 +102,7 @@ def init() -> None:
         try:
             for statement in statements:
                 conn.execute(statement)
+            conn.execute("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''")
             conn.commit()
         finally:
             conn.close()
@@ -149,22 +150,34 @@ def init() -> None:
             );
             """
         )
+        try:
+            conn.execute("ALTER TABLE accounts ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
 
 
-def add_account(email, password, smtp_host, smtp_port, imap_host, imap_port) -> None:
+def add_account(email, password, smtp_host, smtp_port, imap_host, imap_port, display_name="") -> None:
     _exec(
         """
-        INSERT INTO accounts (email, password, smtp_host, smtp_port, imap_host, imap_port)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO accounts (email, password, smtp_host, smtp_port, imap_host, imap_port, display_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(email) DO UPDATE SET
             password=excluded.password,
             smtp_host=excluded.smtp_host,
             smtp_port=excluded.smtp_port,
             imap_host=excluded.imap_host,
-            imap_port=excluded.imap_port
+            imap_port=excluded.imap_port,
+            display_name=CASE
+                WHEN excluded.display_name <> '' THEN excluded.display_name
+                ELSE accounts.display_name
+            END
         """,
-        (email, password, smtp_host, smtp_port, imap_host, imap_port),
+        (email, password, smtp_host, smtp_port, imap_host, imap_port, display_name),
     )
+
+
+def set_display_name(account_id: int, display_name: str) -> None:
+    _exec("UPDATE accounts SET display_name=? WHERE id=?", (display_name, account_id))
 
 
 def list_accounts():

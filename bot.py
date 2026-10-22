@@ -37,7 +37,8 @@ ADMIN_ID = int(os.environ["ADMIN_ID"])
     REPLY_OFFER,
     REPLY_MANUAL,
     ADD_PROXY,
-) = range(10)
+    SET_NAME,
+) = range(11)
 
 MAIN = InlineKeyboardMarkup(
     [
@@ -98,13 +99,18 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     if data == "accounts":
         rows = db.list_accounts()
-        lines = [f"{r['id']}. {r['email']}" for r in rows] or ["Пока пусто."]
-        kb = [
-            [InlineKeyboardButton("Добавить логин:пароль", callback_data="acc_add")],
-            *[[InlineKeyboardButton(f"Удалить {r['email']}", callback_data=f"acc_del:{r['id']}")] for r in rows],
-            [InlineKeyboardButton("Назад", callback_data="home")],
-        ]
-        await query.edit_message_text("Аккаунты:\n" + "\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
+        lines = []
+        kb = [[InlineKeyboardButton("Добавить логин:пароль", callback_data="acc_add")]]
+        for row in rows:
+            name = (row["display_name"] or "").strip() or "имя не задано"
+            lines.append(f"{row['id']}. {row['email']} — {name}")
+            kb.append([InlineKeyboardButton(f"Имя: {row['email']}", callback_data=f"acc_name:{row['id']}")])
+            kb.append([InlineKeyboardButton(f"Удалить {row['email']}", callback_data=f"acc_del:{row['id']}")])
+        kb.append([InlineKeyboardButton("Назад", callback_data="home")])
+        await query.edit_message_text(
+            "Аккаунты:\n" + ("\n".join(lines) if lines else "Пока пусто."),
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
         return ConversationHandler.END
     if data == "presets":
         rows = db.list_presets()
@@ -230,10 +236,17 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     if data == "acc_add":
         await query.edit_message_text(
-            "Пришли Gmail одной строкой:\nлогин:пароль_приложения\n\n"
-            "Порты Gmail подставятся сами: SMTP 587, IMAP 993."
+            "Пришли один ящик или несколько, каждый с новой строки:\n"
+            "логин:пароль_приложения\n"
+            "логин:пароль:Имя отправителя\n\n"
+            "Имя можно не писать в строке и задать потом кнопкой «Имя» в списке аккаунтов.\n"
+            "Порты Gmail подставятся сами."
         )
         return ADD_ACCOUNT
+    if data.startswith("acc_name:"):
+        context.user_data["name_account_id"] = int(data.split(":")[1])
+        await query.edit_message_text("Напиши имя отправителя. Оно будет в поле «От» у писем с этого ящика.")
+        return SET_NAME
     if data == "pre_add":
         await query.edit_message_text("Тема письма. Можно использовать OFFER — туда встанет название товара.")
         return ADD_PRESET_SUBJECT
@@ -247,16 +260,35 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
-    raw = (update.message.text or "").strip()
-    email, sep, password = raw.partition(":")
-    email, password = email.strip(), password.replace(" ", "").strip()
-    hosts = mailer.gmail_hosts(email)
-    if not sep or "@" not in email or not password or not hosts:
-        await update.message.reply_text("Нужен Gmail в формате логин:пароль", reply_markup=MAIN)
+    lines = [line.strip() for line in (update.message.text or "").splitlines() if line.strip()]
+    added, failed = [], []
+    for line in lines:
+        email, sep, rest = line.partition(":")
+        password, _, display_name = rest.partition(":")
+        email, password, display_name = email.strip(), password.replace(" ", "").strip(), display_name.strip()
+        hosts = mailer.gmail_hosts(email)
+        if not sep or "@" not in email or not password or not hosts:
+            failed.append(email or line)
+            continue
+        smtp_host, smtp_port, imap_host, imap_port = hosts
+        db.add_account(email, password, smtp_host, smtp_port, imap_host, imap_port, display_name)
+        added.append(email)
+    if not added:
+        await update.message.reply_text("Ни одной строки не разобрал. Формат: логин:пароль", reply_markup=MAIN)
         return ConversationHandler.END
-    smtp_host, smtp_port, imap_host, imap_port = hosts
-    db.add_account(email, password, smtp_host, smtp_port, imap_host, imap_port)
-    await update.message.reply_text(f"Добавлен {email}. Порты Gmail уже стоят.", reply_markup=MAIN)
+    text = "Добавлены:\n" + "\n".join(added)
+    if failed:
+        text += "\n\nНе разобрал:\n" + "\n".join(failed)
+    await update.message.reply_text(text, reply_markup=MAIN)
+    return ConversationHandler.END
+
+
+async def on_sender_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not only_admin(update):
+        return ConversationHandler.END
+    name = (update.message.text or "").strip()
+    db.set_display_name(context.user_data["name_account_id"], name)
+    await update.message.reply_text(f"Имя отправителя: {name}", reply_markup=MAIN)
     return ConversationHandler.END
 
 
@@ -421,6 +453,7 @@ def main():
             REPLY_OFFER: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_reply_offer)],
             REPLY_MANUAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_reply_manual)],
             ADD_PROXY: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_proxy)],
+            SET_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_sender_name)],
         },
         fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
         per_message=False,

@@ -8,7 +8,7 @@ from email.message import EmailMessage
 
 import socks
 from email.header import decode_header
-from email.utils import parseaddr
+from email.utils import formataddr, parseaddr
 
 
 GMAIL = ("smtp.gmail.com", 587, "imap.gmail.com", 993)
@@ -87,7 +87,8 @@ def check_proxy(proxy) -> None:
 
 def send_mail(account, to_addr: str, subject: str, body: str, proxy=None) -> None:
     msg = EmailMessage()
-    msg["From"] = account["email"]
+    sender_name = (account["display_name"] or "").strip()
+    msg["From"] = formataddr((sender_name, account["email"])) if sender_name else account["email"]
     msg["To"] = to_addr
     msg["Subject"] = subject
     msg.set_content(body)
