@@ -1,16 +1,100 @@
+import os
 import sqlite3
 from pathlib import Path
 
 DB_PATH = Path(__file__).with_name("mailer.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
 
-def connect() -> sqlite3.Connection:
+def _pg():
+    return bool(DATABASE_URL)
+
+
+def connect():
+    if _pg():
+        import psycopg
+        from psycopg.rows import dict_row
+
+        url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        return psycopg.connect(url, row_factory=dict_row)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
+def _q(sql: str) -> str:
+    if _pg():
+        return sql.replace("?", "%s")
+    return sql
+
+
+def _exec(sql: str, params=(), fetch=None):
+    conn = connect()
+    try:
+        cur = conn.execute(_q(sql), params)
+        if fetch == "all":
+            rows = cur.fetchall()
+        elif fetch == "one":
+            rows = cur.fetchone()
+        elif fetch == "id":
+            rows = cur.fetchone()
+            rows = rows["id"] if isinstance(rows, dict) else rows[0]
+        else:
+            rows = None
+        conn.commit()
+        return rows
+    finally:
+        conn.close()
+
+
 def init() -> None:
+    if _pg():
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS accounts (
+                id SERIAL PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                smtp_host TEXT NOT NULL,
+                smtp_port INTEGER NOT NULL,
+                imap_host TEXT NOT NULL,
+                imap_port INTEGER NOT NULL,
+                last_uid INTEGER NOT NULL DEFAULT 0
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS presets (
+                id SERIAL PRIMARY KEY,
+                subject TEXT NOT NULL,
+                body TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS replies (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS inbox (
+                id SERIAL PRIMARY KEY,
+                account_id INTEGER NOT NULL,
+                sender TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                body TEXT NOT NULL
+            )
+            """,
+        ]
+        conn = connect()
+        try:
+            for statement in statements:
+                conn.execute(statement)
+            conn.commit()
+        finally:
+            conn.close()
+        return
+
     with connect() as conn:
         conn.executescript(
             """
@@ -46,86 +130,72 @@ def init() -> None:
 
 
 def add_account(email, password, smtp_host, smtp_port, imap_host, imap_port) -> None:
-    with connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO accounts (email, password, smtp_host, smtp_port, imap_host, imap_port)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(email) DO UPDATE SET
-                password=excluded.password,
-                smtp_host=excluded.smtp_host,
-                smtp_port=excluded.smtp_port,
-                imap_host=excluded.imap_host,
-                imap_port=excluded.imap_port
-            """,
-            (email, password, smtp_host, smtp_port, imap_host, imap_port),
-        )
+    _exec(
+        """
+        INSERT INTO accounts (email, password, smtp_host, smtp_port, imap_host, imap_port)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET
+            password=excluded.password,
+            smtp_host=excluded.smtp_host,
+            smtp_port=excluded.smtp_port,
+            imap_host=excluded.imap_host,
+            imap_port=excluded.imap_port
+        """,
+        (email, password, smtp_host, smtp_port, imap_host, imap_port),
+    )
 
 
 def list_accounts():
-    with connect() as conn:
-        return conn.execute("SELECT * FROM accounts ORDER BY id").fetchall()
+    return _exec("SELECT * FROM accounts ORDER BY id", fetch="all")
 
 
 def get_account(account_id: int):
-    with connect() as conn:
-        return conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+    return _exec("SELECT * FROM accounts WHERE id=?", (account_id,), fetch="one")
 
 
 def delete_account(account_id: int) -> None:
-    with connect() as conn:
-        conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
+    _exec("DELETE FROM accounts WHERE id=?", (account_id,))
 
 
 def set_last_uid(account_id: int, uid: int) -> None:
-    with connect() as conn:
-        conn.execute("UPDATE accounts SET last_uid=? WHERE id=?", (uid, account_id))
+    _exec("UPDATE accounts SET last_uid=? WHERE id=?", (uid, account_id))
 
 
 def add_preset(subject: str, body: str) -> None:
-    with connect() as conn:
-        conn.execute("INSERT INTO presets (subject, body) VALUES (?, ?)", (subject, body))
+    _exec("INSERT INTO presets (subject, body) VALUES (?, ?)", (subject, body))
 
 
 def list_presets():
-    with connect() as conn:
-        return conn.execute("SELECT * FROM presets ORDER BY id").fetchall()
+    return _exec("SELECT * FROM presets ORDER BY id", fetch="all")
 
 
 def delete_preset(preset_id: int) -> None:
-    with connect() as conn:
-        conn.execute("DELETE FROM presets WHERE id=?", (preset_id,))
+    _exec("DELETE FROM presets WHERE id=?", (preset_id,))
 
 
 def add_reply(title: str, body: str) -> None:
-    with connect() as conn:
-        conn.execute("INSERT INTO replies (title, body) VALUES (?, ?)", (title, body))
+    _exec("INSERT INTO replies (title, body) VALUES (?, ?)", (title, body))
 
 
 def list_replies():
-    with connect() as conn:
-        return conn.execute("SELECT * FROM replies ORDER BY id").fetchall()
+    return _exec("SELECT * FROM replies ORDER BY id", fetch="all")
 
 
 def get_reply(reply_id: int):
-    with connect() as conn:
-        return conn.execute("SELECT * FROM replies WHERE id=?", (reply_id,)).fetchone()
+    return _exec("SELECT * FROM replies WHERE id=?", (reply_id,), fetch="one")
 
 
 def delete_reply(reply_id: int) -> None:
-    with connect() as conn:
-        conn.execute("DELETE FROM replies WHERE id=?", (reply_id,))
+    _exec("DELETE FROM replies WHERE id=?", (reply_id,))
 
 
 def save_inbox(account_id: int, sender: str, subject: str, body: str) -> int:
-    with connect() as conn:
-        cur = conn.execute(
-            "INSERT INTO inbox (account_id, sender, subject, body) VALUES (?, ?, ?, ?)",
-            (account_id, sender, subject, body),
-        )
-        return cur.lastrowid
+    return _exec(
+        "INSERT INTO inbox (account_id, sender, subject, body) VALUES (?, ?, ?, ?) RETURNING id",
+        (account_id, sender, subject, body),
+        fetch="id",
+    )
 
 
 def get_inbox(inbox_id: int):
-    with connect() as conn:
-        return conn.execute("SELECT * FROM inbox WHERE id=?", (inbox_id,)).fetchone()
+    return _exec("SELECT * FROM inbox WHERE id=?", (inbox_id,), fetch="one")
