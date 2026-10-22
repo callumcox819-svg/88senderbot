@@ -127,6 +127,40 @@ def send_mail(account, to_addr: str, subject: str, body: str, proxy=None, sender
         smtp.send_message(msg)
 
 
+def _html_to_text(html: str) -> str:
+    html = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", html)
+    html = re.sub(r"(?i)<br\s*/?>", "\n", html)
+    html = re.sub(r"(?i)</p>", "\n", html)
+    html = re.sub(r"(?s)<[^>]+>", " ", html)
+    text = unescape(html)
+    lines = [" ".join(line.split()) for line in text.splitlines()]
+    return "\n".join(line for line in lines if line).strip()
+
+
+def _plain(msg) -> str:
+    if msg.is_multipart():
+        plain = ""
+        html = ""
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            if "attachment" in (part.get("Content-Disposition") or "").lower():
+                continue
+            payload = part.get_payload(decode=True) or b""
+            charset = part.get_content_charset() or "utf-8"
+            text = payload.decode(charset, errors="replace")
+            if part.get_content_type() == "text/plain" and not plain:
+                plain = text
+            elif part.get_content_type() == "text/html" and not html:
+                html = text
+        return (plain or _html_to_text(html)).strip()
+    payload = msg.get_payload(decode=True) or b""
+    text = payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
+    if msg.get_content_type() == "text/html":
+        return _html_to_text(text)
+    return text.strip()
+
+
 def _decode(value: str | None) -> str:
     if not value:
         return ""
@@ -161,29 +195,27 @@ def _fetch_new(account, context) -> tuple[int, list[dict]]:
             return (max(uids) if uids else 0), []
         fresh = [u for u in uids if u > last]
         letters = []
-        for uid in fresh[-10:]:
-            status, fetched = imap.uid("fetch", str(uid), "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)] BODY.PEEK[TEXT])")
+        handled = last
+        for uid in fresh[:15]:
+            status, fetched = imap.uid("fetch", str(uid), "(BODY.PEEK[])")
             if status != "OK" or not fetched:
-                continue
-            raw = b""
-            for item in fetched:
-                if isinstance(item, tuple):
-                    raw += item[1]
-            text = raw.decode("utf-8", errors="replace")
-            header, _, body = text.partition("\r\n\r\n")
-            if not body:
-                header, _, body = text.partition("\n\n")
-            sender = ""
-            subject = ""
-            for line in header.splitlines():
-                low = line.lower()
-                if low.startswith("from:"):
-                    sender = parseaddr(_decode(line.split(":", 1)[1].strip()))[1] or _decode(line.split(":", 1)[1].strip())
-                elif low.startswith("subject:"):
-                    subject = _decode(line.split(":", 1)[1].strip())
-            letters.append({"uid": uid, "from": sender, "subject": subject, "body": body.strip()[:3500]})
-        new_last = max(uids) if uids else last
-        return new_last, letters
+                break
+            raw = next((item[1] for item in fetched if isinstance(item, tuple)), b"")
+            if not raw:
+                break
+            msg = message_from_bytes(raw)
+            name, email = parseaddr(_decode(msg.get("From")))
+            letters.append(
+                {
+                    "uid": uid,
+                    "from": email or name,
+                    "name": name,
+                    "subject": _decode(msg.get("Subject")),
+                    "body": _plain(msg)[:3500],
+                }
+            )
+            handled = uid
+        return handled, letters
     finally:
         try:
             imap.logout()

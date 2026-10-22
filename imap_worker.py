@@ -27,12 +27,22 @@ async def loop():
                     db.set_last_uid(account["id"], new_uid)
                 for letter in letters:
                     inbox_id = db.save_inbox(account["id"], letter["from"], letter["subject"], letter["body"])
-                    text = (
-                        f"Получено сообщение на {account['email']}\n"
-                        f"от {letter['from'] or 'неизвестного адреса'}\n\n"
-                        f"Тема:\n{letter['subject'] or '(без темы)'}\n\n"
-                        f"Текст:\n{letter['body'] or '(пусто)'}"
-                    )
+                    who = letter.get("name") or letter["from"] or "неизвестного адреса"
+                    lines = [
+                        f"Получено сообщение на {account['email']}",
+                        f"от {who}",
+                    ]
+                    if letter.get("name") and letter["from"]:
+                        lines.append(letter["from"])
+                    lines += [
+                        "",
+                        "Тема:",
+                        letter["subject"] or "(без темы)",
+                        "",
+                        "Текст:",
+                        letter["body"] or "(пусто)",
+                    ]
+                    text = "\n".join(lines)
                     kb = None
                     if letter["from"]:
                         kb = InlineKeyboardMarkup(
