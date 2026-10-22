@@ -517,7 +517,7 @@ async def on_send_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await asyncio.wait_for(
             asyncio.to_thread(mailer.send_mail, account, to_addr, subject, body, active_proxy(), from_name()),
-            timeout=40,
+            timeout=120,
         )
         db.remember_sent(to_addr)
     except Exception as exc:

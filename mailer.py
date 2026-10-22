@@ -1,6 +1,7 @@
 import imaplib
 import re
 import smtplib
+import time
 import socket
 import ssl
 import threading
@@ -102,13 +103,38 @@ def _socks_connection(proxy, dest, timeout):
 
 
 class _ProxySMTP(smtplib.SMTP_SSL):
-    def __init__(self, host, proxy, timeout=30, context=None):
+    def __init__(self, host, proxy, timeout=25, context=None):
         self._proxy = proxy
         super().__init__(host, 465, timeout=timeout, context=context)
 
     def _get_socket(self, host, port, timeout):
         raw = _socks_connection(self._proxy, (host, port), timeout)
         return self.context.wrap_socket(raw, server_hostname=host)
+
+
+class _ProxySMTPStartTLS(smtplib.SMTP):
+    def __init__(self, host, proxy, timeout=25):
+        self._proxy = proxy
+        super().__init__(host, 587, timeout=timeout)
+
+    def _get_socket(self, host, port, timeout):
+        return _socks_connection(self._proxy, (host, port), timeout)
+
+
+def _deliver(account, msg, proxy, context) -> None:
+    try:
+        with _ProxySMTP(account["smtp_host"], proxy, context=context) as smtp:
+            smtp.login(account["email"], account["password"])
+            smtp.send_message(msg)
+        return
+    except Exception:
+        pass
+    with _ProxySMTPStartTLS(account["smtp_host"], proxy) as smtp:
+        smtp.ehlo()
+        smtp.starttls(context=context)
+        smtp.ehlo()
+        smtp.login(account["email"], account["password"])
+        smtp.send_message(msg)
 
 
 def send_mail(account, to_addr: str, subject: str, body: str, proxy=None, sender_name=None) -> None:
@@ -122,9 +148,15 @@ def send_mail(account, to_addr: str, subject: str, body: str, proxy=None, sender
     msg.set_content(body)
 
     context = ssl.create_default_context()
-    with _ProxySMTP(account["smtp_host"], proxy, timeout=30, context=context) as smtp:
-        smtp.login(account["email"], account["password"])
-        smtp.send_message(msg)
+    last_error = None
+    for attempt in range(3):
+        try:
+            _deliver(account, msg, proxy, context)
+            return
+        except Exception as exc:
+            last_error = exc
+            time.sleep(2)
+    raise RuntimeError(f"Прокси оборвал соединение 3 раза: {last_error}")
 
 
 def _html_to_text(html: str) -> str:
