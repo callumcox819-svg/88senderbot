@@ -175,7 +175,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Пресет ответа удалён.", reply_markup=main_menu())
         return ConversationHandler.END
     if data == "rep_add":
-        await query.edit_message_text("Название кнопки. Например: Ещё продаётся")
+        await query.edit_message_text("Название пресета. Например: Доставка")
         return ADD_REPLY_TITLE
     if data.startswith("write:"):
         inbox_id = int(data.split(":")[1])
@@ -183,11 +183,34 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not letter:
             await query.edit_message_text("Письмо уже не найдено.", reply_markup=main_menu())
             return ConversationHandler.END
-        rows = db.list_replies()
-        kb = [[InlineKeyboardButton(r["title"], callback_data=f"use_rep:{inbox_id}:{r['id']}")] for r in rows]
-        kb.append([InlineKeyboardButton("Написать вручную", callback_data=f"manual:{inbox_id}")])
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Отправить пресет", callback_data=f"pick_rep:{inbox_id}"),
+                    InlineKeyboardButton("Написать вручную", callback_data=f"manual:{inbox_id}"),
+                ],
+                [InlineKeyboardButton("Отмена", callback_data="home")],
+            ]
+        )
         await query.edit_message_text(
-            f"Ответ для {letter['sender']}\nВыбери шаблон или напиши текст сам.",
+            f"Ответ на письмо\nКому: {letter['sender']}\n\nВыберите вариант",
+            reply_markup=kb,
+        )
+        return ConversationHandler.END
+    if data.startswith("pick_rep:"):
+        inbox_id = int(data.split(":")[1])
+        letter = db.get_inbox(inbox_id)
+        rows = db.list_replies()
+        if not letter:
+            await query.edit_message_text("Письмо уже не найдено.", reply_markup=main_menu())
+            return ConversationHandler.END
+        if not rows:
+            await query.edit_message_text("Пресетов ответа пока нет. Добавь их в меню «Пресеты».", reply_markup=main_menu())
+            return ConversationHandler.END
+        kb = [[InlineKeyboardButton(r["title"], callback_data=f"use_rep:{inbox_id}:{r['id']}")] for r in rows]
+        kb.append([InlineKeyboardButton("Отмена", callback_data="home")])
+        await query.edit_message_text(
+            f"Кому: {letter['sender']}\nВыбери пресет",
             reply_markup=InlineKeyboardMarkup(kb),
         )
         return ConversationHandler.END
@@ -367,7 +390,10 @@ async def on_reply_body(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
     db.add_reply(context.user_data["reply_title"], (update.message.text or "").strip())
-    await update.message.reply_text("Пресет ответа сохранён. Его можно выбрать после кнопки «Написать».", reply_markup=main_menu())
+    await update.message.reply_text(
+        "Пресет сохранён. Он появится в «Отправить пресет» после кнопки «Написать ещё».",
+        reply_markup=main_menu(),
+    )
     return ConversationHandler.END
 
 

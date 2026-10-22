@@ -36,7 +36,7 @@ async def loop():
                     kb = None
                     if letter["from"]:
                         kb = InlineKeyboardMarkup(
-                            [[InlineKeyboardButton("Написать", callback_data=f"write:{inbox_id}")]]
+                            [[InlineKeyboardButton("Написать ещё", callback_data=f"write:{inbox_id}")]]
                         )
                     await bot.send_message(ADMIN_ID, text[:4000], reply_markup=kb)
             except Exception:
