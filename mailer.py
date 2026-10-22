@@ -1,10 +1,13 @@
 import imaplib
+import re
 import smtplib
 import socket
 import ssl
 import threading
 from contextlib import contextmanager
+from email import message_from_bytes
 from email.message import EmailMessage
+from html import unescape
 
 import socks
 from email.header import decode_header
@@ -86,6 +89,8 @@ def check_proxy(proxy) -> None:
 
 
 def send_mail(account, to_addr: str, subject: str, body: str, proxy=None, sender_name=None) -> None:
+    if not proxy:
+        raise RuntimeError("Нет активного прокси. Письмо не отправлено.")
     msg = EmailMessage()
     sender_name = (sender_name if sender_name is not None else account["display_name"] or "").strip()
     msg["From"] = formataddr((sender_name, account["email"])) if sender_name else account["email"]
@@ -116,6 +121,8 @@ def _decode(value: str | None) -> str:
 
 
 def fetch_new(account, proxy=None) -> tuple[int, list[dict]]:
+    if not proxy:
+        raise RuntimeError("Нет активного прокси. IMAP не подключается напрямую.")
     context = ssl.create_default_context()
     with via_proxy(proxy):
         return _fetch_new(account, context)

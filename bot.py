@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import random
 import re
 
 from dotenv import load_dotenv
@@ -89,6 +88,20 @@ def from_name():
     return db.get_setting("sender_name").strip() or None
 
 
+def rotate(rows, key):
+    index = int(db.get_setting(key) or "0")
+    row = rows[index % len(rows)]
+    db.set_setting(key, str(index + 1))
+    return row
+
+
+def active_proxy():
+    proxy = db.get_active_proxy()
+    if not proxy:
+        raise RuntimeError("Нет активного прокси. Добавь его в меню «Прокси».")
+    return proxy
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return
@@ -134,7 +147,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             *[[InlineKeyboardButton(f"Удалить #{r['id']}", callback_data=f"pre_del:{r['id']}")] for r in rows],
             [InlineKeyboardButton("Назад", callback_data="home")],
         ]
-        head = "Умные пресеты. При отправке бот сам выбирает один.\n" if rows else "Умные пресеты:\n"
+        head = "Умные пресеты. При отправке бот берёт следующий по очереди.\n" if rows else "Умные пресеты:\n"
         await query.edit_message_text(head + ("\n".join(lines) if lines else "Пока пусто."), reply_markup=InlineKeyboardMarkup(kb))
         return ConversationHandler.END
     if data == "send":
@@ -144,11 +157,11 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not db.list_presets():
             await query.edit_message_text("Сначала добавь пресет.", reply_markup=main_menu())
             return ConversationHandler.END
-        accounts = db.list_accounts()
-        kb = [[InlineKeyboardButton(r["email"], callback_data=f"acc_pick:{r['id']}")] for r in accounts]
-        kb.append([InlineKeyboardButton("Назад", callback_data="home")])
-        await query.edit_message_text("С какого ящика отправить?", reply_markup=InlineKeyboardMarkup(kb))
-        return ConversationHandler.END
+        if not db.get_active_proxy():
+            await query.edit_message_text("Сначала добавь прокси. Без него письма не уходят.", reply_markup=main_menu())
+            return ConversationHandler.END
+        await query.edit_message_text("Введите электронную почту, куда отправить письмо.")
+        return SEND_TO
     if data.startswith("acc_del:"):
         db.delete_account(int(data.split(":")[1]))
         await query.edit_message_text("Аккаунт удалён.", reply_markup=main_menu())
@@ -305,13 +318,9 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "Пришли тексты, каждый вариант с новой строки.\n"
             "OFFER заменится на название товара.\n"
-            "При отправке бот сам выберет одну строку."
+            "При отправке бот берёт следующий вариант по очереди."
         )
         return ADD_PRESET_BODY
-    if data.startswith("acc_pick:"):
-        context.user_data["account_id"] = int(data.split(":")[1])
-        await query.edit_message_text("Введите электронную почту, куда отправить письмо.")
-        return SEND_TO
     return ConversationHandler.END
 
 
@@ -405,7 +414,7 @@ async def _send_reply(message, context, offer: str):
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
     body = apply_offer(reply["body"], offer) if offer else reply["body"]
-    await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, db.get_active_proxy(), from_name())
+    await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, active_proxy(), from_name())
     await message.reply_text(
         f"Ответ «{reply['title']}» ушёл с {account['email']} на {letter['sender']}",
         reply_markup=main_menu(),
@@ -422,7 +431,7 @@ async def on_reply_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subject = f"Re: {subject}"
     body = (update.message.text or "").strip()
     try:
-        await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, db.get_active_proxy(), from_name())
+        await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, active_proxy(), from_name())
     except Exception as exc:
         log.exception("manual reply failed")
         await update.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=main_menu())
@@ -459,7 +468,7 @@ async def on_preset_body(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for body in bodies:
         db.add_preset("OFFER", body)
     await update.message.reply_text(
-        f"Сохранено вариантов: {len(bodies)}. При отправке бот выберет один случайно.",
+        f"Сохранено вариантов: {len(bodies)}. При отправке бот берёт их по очереди.",
         reply_markup=main_menu(),
     )
     return ConversationHandler.END
@@ -473,13 +482,7 @@ async def on_send_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Это не похоже на один адрес. Введи email ещё раз.")
         return SEND_TO
     context.user_data["to"] = to_addr
-    preset = random.choice(db.list_presets())
-    context.user_data["preset_id"] = preset["id"]
-    context.user_data["preset_subject"] = preset["subject"]
-    context.user_data["preset_body"] = preset["body"]
-    await update.message.reply_text(
-        f"Выбран вариант #{preset['id']}.\n\nВВЕДИТЕ НАЗВАНИЕ ТОВАРА"
-    )
+    await update.message.reply_text("ВВЕДИТЕ ТЕКСТ ДЛЯ OFFER")
     return SEND_OFFER
 
 
@@ -487,13 +490,14 @@ async def on_send_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
     offer = (update.message.text or "").strip()
-    account = db.get_account(context.user_data["account_id"])
-    subject_template = db.get_setting("mail_subject").strip() or context.user_data["preset_subject"]
+    account = rotate(db.list_accounts(), "rr_account")
+    preset = rotate(db.list_presets(), "rr_preset")
+    subject_template = db.get_setting("mail_subject").strip() or preset["subject"]
     subject = apply_offer(subject_template, offer)
-    body = apply_offer(context.user_data["preset_body"], offer)
+    body = apply_offer(preset["body"], offer)
     to_addr = context.user_data["to"]
     try:
-        await asyncio.to_thread(mailer.send_mail, account, to_addr, subject, body, db.get_active_proxy(), from_name())
+        await asyncio.to_thread(mailer.send_mail, account, to_addr, subject, body, active_proxy(), from_name())
     except Exception as exc:
         log.exception("send failed")
         await update.message.reply_text(f"Не отправилось: {exc}", reply_markup=main_menu())
