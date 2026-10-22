@@ -124,8 +124,8 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = db.list_presets()
         lines = []
         for r in rows:
-            preview = " ".join((r["body"] or "").split())[:40]
-            lines.append(f"{r['id']}. {r['subject']} — {preview}")
+            preview = " ".join((r["body"] or "").split())[:60]
+            lines.append(f"{r['id']}. {preview}")
         kb = [
             [InlineKeyboardButton("Новый пресет", callback_data="pre_add")],
             *[[InlineKeyboardButton(f"Удалить #{r['id']}", callback_data=f"pre_del:{r['id']}")] for r in rows],
@@ -267,8 +267,12 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Напиши имя отправителя. Оно будет в поле «От» у писем с этого ящика.")
         return SET_NAME
     if data == "pre_add":
-        await query.edit_message_text("Тема письма. Можно использовать OFFER — туда встанет название товара.")
-        return ADD_PRESET_SUBJECT
+        await query.edit_message_text(
+            "Пришли текст письма. OFFER заменится на название товара.\n\n"
+            "Несколько вариантов — в одном сообщении, между ними строка ---\n"
+            "При отправке бот сам выберет один. Тема письма будет названием товара."
+        )
+        return ADD_PRESET_BODY
     if data.startswith("acc_pick:"):
         context.user_data["account_id"] = int(data.split(":")[1])
         await query.edit_message_text("Введите электронную почту, куда отправить письмо.")
@@ -398,18 +402,6 @@ async def on_reply_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-async def on_preset_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not only_admin(update):
-        return ConversationHandler.END
-    context.user_data["subject"] = (update.message.text or "").strip()
-    await update.message.reply_text(
-        "Текст письма. OFFER заменится на название товара.\n\n"
-        "Несколько вариантов — в одном сообщении, между ними строка ---\n"
-        "При отправке бот сам выберет один."
-    )
-    return ADD_PRESET_BODY
-
-
 async def on_preset_body(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
@@ -417,9 +409,8 @@ async def on_preset_body(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not bodies:
         await update.message.reply_text("Текст пустой. Пришли варианты ещё раз.")
         return ADD_PRESET_BODY
-    subject = context.user_data["subject"]
     for body in bodies:
-        db.add_preset(subject, body)
+        db.add_preset("OFFER", body)
     await update.message.reply_text(
         f"Сохранено вариантов: {len(bodies)}. При отправке бот выберет один случайно.",
         reply_markup=main_menu(),
@@ -440,7 +431,7 @@ async def on_send_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["preset_subject"] = preset["subject"]
     context.user_data["preset_body"] = preset["body"]
     await update.message.reply_text(
-        f"Шаблон #{preset['id']}: {preset['subject']}\n\nВВЕДИТЕ НАЗВАНИЕ ТОВАРА"
+        f"Выбран вариант #{preset['id']}.\n\nВВЕДИТЕ НАЗВАНИЕ ТОВАРА"
     )
     return SEND_OFFER
 
@@ -480,7 +471,6 @@ def main():
         ],
         states={
             ADD_ACCOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_account)],
-            ADD_PRESET_SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_preset_subject)],
             ADD_PRESET_BODY: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_preset_body)],
             ADD_REPLY_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_reply_title)],
             ADD_REPLY_BODY: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_reply_body)],
