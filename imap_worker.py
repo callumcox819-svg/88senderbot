@@ -27,6 +27,8 @@ async def loop():
                 if new_uid != account["last_uid"]:
                     db.set_last_uid(account["id"], new_uid)
                 for letter in letters:
+                    if not db.was_sent_to(letter["from"]):
+                        continue
                     inbox_id = db.save_inbox(account["id"], letter["from"], letter["subject"], letter["body"])
                     sender_name = letter.get("name") or letter["from"] or "неизвестного адреса"
                     sender_mail = letter["from"] or ""

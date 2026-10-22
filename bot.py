@@ -425,6 +425,7 @@ async def _send_reply(message, context, offer: str):
         subject = f"Re: {subject}"
     body = apply_offer(reply["body"], offer) if offer else reply["body"]
     await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, active_proxy(), from_name())
+    db.remember_sent(letter["sender"])
     await message.reply_text(
         f"Ответ «{reply['title']}» ушёл с {account['email']} на {letter['sender']}",
         reply_markup=main_menu(),
@@ -442,6 +443,7 @@ async def on_reply_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     body = (update.message.text or "").strip()
     try:
         await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, active_proxy(), from_name())
+        db.remember_sent(letter["sender"])
     except Exception as exc:
         log.exception("manual reply failed")
         await update.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=main_menu())
@@ -517,6 +519,7 @@ async def on_send_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             asyncio.to_thread(mailer.send_mail, account, to_addr, subject, body, active_proxy(), from_name()),
             timeout=40,
         )
+        db.remember_sent(to_addr)
     except Exception as exc:
         log.exception("send failed")
         await status.edit_text(f"Не отправилось: {exc}")
