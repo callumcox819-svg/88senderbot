@@ -27,28 +27,40 @@ async def loop():
                     db.set_last_uid(account["id"], new_uid)
                 for letter in letters:
                     inbox_id = db.save_inbox(account["id"], letter["from"], letter["subject"], letter["body"])
-                    who = letter.get("name") or letter["from"] or "неизвестного адреса"
-                    lines = [
-                        f"Получено сообщение на {account['email']}",
-                        f"от {who}",
-                    ]
-                    if letter.get("name") and letter["from"]:
-                        lines.append(letter["from"])
-                    lines += [
-                        "",
-                        "Тема:",
-                        letter["subject"] or "(без темы)",
-                        "",
-                        "Текст:",
-                        letter["body"] or "(пусто)",
-                    ]
-                    text = "\n".join(lines)
+                    sender_name = letter.get("name") or letter["from"] or "неизвестного адреса"
+                    sender_mail = letter["from"] or ""
+                    if sender_name and sender_mail and sender_name != sender_mail:
+                        from_line = f"от \"{sender_name}\" {sender_mail}"
+                    else:
+                        from_line = f"от {sender_mail or sender_name}"
+                    text = "\n".join(
+                        [
+                            f"⚡️ Получено сообщение на {account['email']}",
+                            from_line,
+                            "",
+                            "Тема:",
+                            letter["subject"] or "(без темы)",
+                            "",
+                            "Текст:",
+                            letter["body"] or "(пусто)",
+                        ]
+                    )
                     kb = None
                     if letter["from"]:
                         kb = InlineKeyboardMarkup(
-                            [[InlineKeyboardButton("Написать ещё", callback_data=f"write:{inbox_id}")]]
+                            [[InlineKeyboardButton("✍️ Написать ещё", callback_data=f"write:{inbox_id}")]]
                         )
-                    await bot.send_message(ADMIN_ID, text[:4000], reply_markup=kb)
+                    reply_to = db.first_inbox_message(account["id"], letter["from"]) if letter["from"] else None
+                    try:
+                        sent = await bot.send_message(
+                            ADMIN_ID,
+                            text[:4000],
+                            reply_markup=kb,
+                            reply_to_message_id=reply_to,
+                        )
+                    except Exception:
+                        sent = await bot.send_message(ADMIN_ID, text[:4000], reply_markup=kb)
+                    db.set_inbox_message(inbox_id, sent.message_id)
             except Exception:
                 log.exception("imap %s", account["email"])
         await asyncio.sleep(45)

@@ -103,6 +103,7 @@ def init() -> None:
             for statement in statements:
                 conn.execute(statement)
             conn.execute("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''")
+            conn.execute("ALTER TABLE inbox ADD COLUMN IF NOT EXISTS tg_message_id BIGINT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS settings (
@@ -164,6 +165,10 @@ def init() -> None:
         )
         try:
             conn.execute("ALTER TABLE accounts ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE inbox ADD COLUMN tg_message_id INTEGER")
         except sqlite3.OperationalError:
             pass
 
@@ -258,6 +263,23 @@ def save_inbox(account_id: int, sender: str, subject: str, body: str) -> int:
 
 def get_inbox(inbox_id: int):
     return _exec("SELECT * FROM inbox WHERE id=?", (inbox_id,), fetch="one")
+
+
+def set_inbox_message(inbox_id: int, message_id: int) -> None:
+    _exec("UPDATE inbox SET tg_message_id=? WHERE id=?", (message_id, inbox_id))
+
+
+def first_inbox_message(account_id: int, sender: str):
+    row = _exec(
+        """
+        SELECT tg_message_id FROM inbox
+        WHERE account_id=? AND lower(sender)=lower(?) AND tg_message_id IS NOT NULL
+        ORDER BY id LIMIT 1
+        """,
+        (account_id, sender),
+        fetch="one",
+    )
+    return row["tg_message_id"] if row else None
 
 
 def add_proxy(raw, kind, host, port, username, password) -> None:

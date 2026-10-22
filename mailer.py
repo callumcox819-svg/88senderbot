@@ -137,6 +137,20 @@ def _html_to_text(html: str) -> str:
     return "\n".join(line for line in lines if line).strip()
 
 
+def _new_part(text: str) -> str:
+    kept = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(">"):
+            continue
+        if re.match(r"(?i)^on .+ wrote:$", stripped):
+            break
+        if stripped.startswith("-----") or re.match(r"^_{5,}$", stripped):
+            break
+        kept.append(line.rstrip())
+    return "\n".join(kept).strip()
+
+
 def _plain(msg) -> str:
     if msg.is_multipart():
         plain = ""
@@ -153,12 +167,12 @@ def _plain(msg) -> str:
                 plain = text
             elif part.get_content_type() == "text/html" and not html:
                 html = text
-        return (plain or _html_to_text(html)).strip()
+        return _new_part(plain or _html_to_text(html))
     payload = msg.get_payload(decode=True) or b""
     text = payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
     if msg.get_content_type() == "text/html":
-        return _html_to_text(text)
-    return text.strip()
+        return _new_part(_html_to_text(text))
+    return _new_part(text)
 
 
 def _decode(value: str | None) -> str:
