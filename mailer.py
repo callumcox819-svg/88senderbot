@@ -226,6 +226,7 @@ def _fetch_new(account, context) -> tuple[int, list[dict]]:
                     "name": name,
                     "subject": _decode(msg.get("Subject")),
                     "body": _plain(msg)[:3500],
+                    "mid": (msg.get("Message-ID") or "").strip().strip("<>").split("@")[0],
                 }
             )
             handled = uid

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from html import escape
 
 from dotenv import load_dotenv
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
@@ -29,37 +30,36 @@ async def loop():
                     inbox_id = db.save_inbox(account["id"], letter["from"], letter["subject"], letter["body"])
                     sender_name = letter.get("name") or letter["from"] or "неизвестного адреса"
                     sender_mail = letter["from"] or ""
-                    if sender_name and sender_mail and sender_name != sender_mail:
-                        from_line = f"от \"{sender_name}\" {sender_mail}"
-                    else:
-                        from_line = f"от {sender_mail or sender_name}"
-                    text = "\n".join(
-                        [
-                            f"⚡️ Получено сообщение на {account['email']}",
-                            from_line,
-                            "",
-                            "Тема:",
-                            letter["subject"] or "(без темы)",
-                            "",
-                            "Текст:",
-                            letter["body"] or "(пусто)",
-                        ]
-                    )
+                    own_name = (account["display_name"] or "").strip()
+                    title = f"{sender_name} ({own_name})" if own_name else sender_name
+                    lines = [
+                        f"⚡️ Получено сообщение на \"{escape(title)}\" {escape(account['email'])}",
+                        escape(account["email"]),
+                        f"от \"{escape(sender_name)}\" {escape(sender_mail)}",
+                    ]
+                    if letter.get("mid"):
+                        lines += ["", f"ID: {escape(letter['mid'])}"]
+                    lines += [
+                        "",
+                        "Тема:",
+                        f"<blockquote>{escape(letter['subject'] or '(без темы)')}</blockquote>",
+                        "Текст:",
+                        f"<blockquote>{escape(letter['body'] or '(пусто)')}</blockquote>",
+                    ]
+                    text = "\n".join(lines)
                     kb = None
                     if letter["from"]:
                         kb = InlineKeyboardMarkup(
                             [[InlineKeyboardButton("✍️ Написать ещё", callback_data=f"write:{inbox_id}")]]
                         )
                     reply_to = db.first_inbox_message(account["id"], letter["from"]) if letter["from"] else None
+                    kwargs = {"reply_markup": kb, "parse_mode": "HTML"}
                     try:
                         sent = await bot.send_message(
-                            ADMIN_ID,
-                            text[:4000],
-                            reply_markup=kb,
-                            reply_to_message_id=reply_to,
+                            ADMIN_ID, text[:4000], reply_to_message_id=reply_to, **kwargs
                         )
                     except Exception:
-                        sent = await bot.send_message(ADMIN_ID, text[:4000], reply_markup=kb)
+                        sent = await bot.send_message(ADMIN_ID, text[:4000], **kwargs)
                     db.set_inbox_message(inbox_id, sent.message_id)
             except Exception:
                 log.exception("imap %s", account["email"])
