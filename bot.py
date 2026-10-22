@@ -84,6 +84,16 @@ def apply_offer(text: str, offer: str) -> str:
     return re.sub(r"OFFER", offer, text)
 
 
+def pasted_text(message) -> str:
+    lines = []
+    for line in (message.text or "").splitlines():
+        line = line.strip()
+        if re.fullmatch(r"https?://\S+", line, flags=re.I):
+            continue
+        lines.append(line)
+    return " ".join(lines).strip()
+
+
 def from_name():
     return db.get_setting("sender_name").strip() or None
 
@@ -447,7 +457,7 @@ async def on_reply_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
     try:
-        await _send_reply(update.message, context, offer=(update.message.text or "").strip())
+        await _send_reply(update.message, context, offer=pasted_text(update.message))
     except Exception as exc:
         log.exception("reply failed")
         await update.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=main_menu())
@@ -489,23 +499,31 @@ async def on_send_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_send_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not only_admin(update):
         return ConversationHandler.END
-    offer = (update.message.text or "").strip()
+    offer = pasted_text(update.message)
+    if not offer:
+        await update.message.reply_text("Это ссылка без названия. Пришли имя товара текстом.")
+        return SEND_OFFER
     account = rotate(db.list_accounts(), "rr_account")
     preset = rotate(db.list_presets(), "rr_preset")
     subject_template = db.get_setting("mail_subject").strip() or preset["subject"]
     subject = apply_offer(subject_template, offer)
     body = apply_offer(preset["body"], offer)
     to_addr = context.user_data["to"]
+    status = await update.message.reply_text(
+        f"Отправляю…\nС ящика: {account['email']}\nКому: {to_addr}\nOFFER: {offer}"
+    )
     try:
-        await asyncio.to_thread(mailer.send_mail, account, to_addr, subject, body, active_proxy(), from_name())
+        await asyncio.wait_for(
+            asyncio.to_thread(mailer.send_mail, account, to_addr, subject, body, active_proxy(), from_name()),
+            timeout=40,
+        )
     except Exception as exc:
         log.exception("send failed")
-        await update.message.reply_text(f"Не отправилось: {exc}", reply_markup=main_menu())
+        await status.edit_text(f"Не отправилось: {exc}")
+        await update.message.reply_text("Меню.", reply_markup=main_menu())
         return ConversationHandler.END
-    await update.message.reply_text(
-        f"Отправлено с {account['email']} на {to_addr}\nТема: {subject}",
-        reply_markup=main_menu(),
-    )
+    await status.edit_text(f"Отправлено с {account['email']} на {to_addr}\nТема: {subject}")
+    await update.message.reply_text("Меню.", reply_markup=main_menu())
     return ConversationHandler.END
 
 
