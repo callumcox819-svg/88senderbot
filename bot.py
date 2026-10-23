@@ -440,7 +440,11 @@ async def _send_reply(message, context, offer: str):
     body = apply_offer(reply["body"], offer) if offer else reply["body"]
     await asyncio.to_thread(mailer.send_mail, account, letter["sender"], subject, body, active_proxy(), from_name())
     db.remember_sent(letter["sender"])
-    await message.reply_text("прессет отправлен", reply_markup=main_menu())
+    await _confirm_on_card(
+        context,
+        letter,
+        f"Ответ [пресет] — успешно отправлен на {letter['sender']} с аккаунта {account['email']}",
+    )
 
 
 async def on_reply_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -459,8 +463,21 @@ async def on_reply_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.exception("manual reply failed")
         await update.message.reply_text(f"Ответ не ушёл: {exc}", reply_markup=main_menu())
         return ConversationHandler.END
-    await update.message.reply_text("письмо отправлено", reply_markup=main_menu())
+    await _confirm_on_card(
+        context,
+        letter,
+        f"Ответ — успешно отправлен на {letter['sender']} с аккаунта {account['email']}",
+    )
     return ConversationHandler.END
+
+
+async def _confirm_on_card(context, letter, text: str):
+    anchor = letter.get("tg_message_id")
+    kwargs = {"reply_to_message_id": anchor} if anchor else {}
+    try:
+        await context.bot.send_message(ADMIN_ID, text, **kwargs)
+    except Exception:
+        await context.bot.send_message(ADMIN_ID, text)
 
 
 async def on_reply_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):

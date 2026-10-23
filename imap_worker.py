@@ -101,7 +101,17 @@ async def loop():
                         kb = InlineKeyboardMarkup(
                             [[InlineKeyboardButton("Написать ещё", callback_data=f"write:{inbox_id}")]]
                         )
-                    sent = await bot.send_message(ADMIN_ID, text, parse_mode="HTML", reply_markup=kb)
+                    anchor = db.first_inbox_message(account["id"], letter["from"])
+                    kwargs = {"parse_mode": "HTML", "reply_markup": kb}
+                    if anchor:
+                        kwargs["reply_to_message_id"] = anchor
+                    try:
+                        sent = await bot.send_message(ADMIN_ID, text, **kwargs)
+                    except Exception:
+                        if not anchor:
+                            raise
+                        kwargs.pop("reply_to_message_id", None)
+                        sent = await bot.send_message(ADMIN_ID, text, **kwargs)
                     db.set_inbox_message(inbox_id, sent.message_id)
             except Exception:
                 log.exception("imap %s", account["email"])
