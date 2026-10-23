@@ -175,7 +175,9 @@ def _new_part(text: str) -> str:
         stripped = line.strip()
         if stripped.startswith(">"):
             continue
-        if re.match(r"(?i)^on .+ wrote:$", stripped):
+        if re.match(r"(?i)^wrote:$", stripped):
+            break
+        if re.match(r"(?i)^on .+wrote:?$", stripped) or re.match(r"(?i)^on .+\d{4}", stripped):
             break
         if stripped.startswith("-----") or re.match(r"^_{5,}$", stripped):
             break

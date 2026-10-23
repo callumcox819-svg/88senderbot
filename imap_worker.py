@@ -32,7 +32,7 @@ async def loop():
                     inbox_id = db.save_inbox(account["id"], letter["from"], letter["subject"], letter["body"])
                     sender_name = letter.get("name") or letter["from"] or "неизвестного адреса"
                     sender_mail = letter["from"] or ""
-                    own_name = (account["display_name"] or "").strip()
+                    own_name = (db.get_setting("sender_name") or account["display_name"] or "").strip()
                     title = f"{sender_name} ({own_name})" if own_name else sender_name
                     lines = [
                         f"⚡️ Получено сообщение на \"{escape(title)}\"",
