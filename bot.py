@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 import re
+from html import unescape
+from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -84,14 +86,46 @@ def apply_offer(text: str, offer: str) -> str:
     return re.sub(r"OFFER", offer, text)
 
 
+def _message_urls(message) -> list[str]:
+    text = message.text or ""
+    found = []
+    for ent in message.entities or []:
+        if ent.type == "text_link" and ent.url:
+            found.append(ent.url)
+        elif ent.type == "url":
+            found.append(text[ent.offset : ent.offset + ent.length])
+    found.extend(re.findall(r"https?://\S+", text, flags=re.I))
+    return found
+
+
+def _page_title(url: str) -> str:
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(request, timeout=12) as response:
+        raw = response.read(200_000)
+        charset = response.headers.get_content_charset() or "utf-8"
+    html = raw.decode(charset, errors="replace")
+    patterns = (
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']',
+        r"<title[^>]*>(.*?)</title>",
+    )
+    title = ""
+    for pattern in patterns:
+        match = re.search(pattern, html, flags=re.I | re.S)
+        if match:
+            title = match.group(1)
+            break
+    title = unescape(re.sub(r"\s+", " ", title)).strip()
+    return re.split(r"\s+[|\-–—]\s+", title)[0].strip()
+
+
 def pasted_text(message) -> str:
-    lines = []
-    for line in (message.text or "").splitlines():
-        line = line.strip()
-        if re.fullmatch(r"https?://\S+", line, flags=re.I):
-            continue
-        lines.append(line)
-    return " ".join(lines).strip()
+    text = message.text or ""
+    cleaned = text
+    for url in _message_urls(message):
+        cleaned = cleaned.replace(url, " ")
+    cleaned = re.sub(r"https?://\S+", " ", cleaned, flags=re.I)
+    return " ".join(cleaned.split())
 
 
 def from_name():
@@ -499,8 +533,17 @@ async def on_send_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     offer = pasted_text(update.message)
     if not offer:
-        await update.message.reply_text("Это ссылка без названия. Пришли имя товара текстом.")
-        return SEND_OFFER
+        urls = _message_urls(update.message)
+        if urls:
+            await update.message.reply_text("Беру название со страницы…")
+            try:
+                offer = await asyncio.to_thread(_page_title, urls[0])
+            except Exception:
+                log.exception("page title")
+                offer = ""
+        if not offer:
+            await update.message.reply_text("Это ссылка без названия. Пришли имя товара текстом.")
+            return SEND_OFFER
     account = rotate(db.list_accounts(), "rr_account")
     preset = rotate(db.list_presets(), "rr_preset")
     subject_template = db.get_setting("mail_subject").strip() or preset["subject"]
