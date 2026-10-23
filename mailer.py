@@ -201,12 +201,12 @@ def _plain(msg) -> str:
                 plain = text
             elif part.get_content_type() == "text/html" and not html:
                 html = text
-        return _new_part(plain or _html_to_text(html))
+        return (plain or _html_to_text(html)).strip()
     payload = msg.get_payload(decode=True) or b""
     text = payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
     if msg.get_content_type() == "text/html":
-        return _new_part(_html_to_text(text))
-    return _new_part(text)
+        return _html_to_text(text).strip()
+    return text.strip()
 
 
 def _decode(value: str | None) -> str:
