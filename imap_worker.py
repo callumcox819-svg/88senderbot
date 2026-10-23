@@ -65,12 +65,14 @@ def _reply_preview(raw: str) -> str:
     return seller
 
 
-def _card(title, mailbox, sender_name, sender_mail, subject, body) -> str:
+def _card(title, mailbox, sender_name, sender_mail, subject, body, product="") -> str:
     shown = _e(_reply_preview(body)[:3200] or "—")
+    product_line = f"\n<b>Товар:</b> <code>{_e(product)}</code>\n" if product else ""
     return (
         f"⚡️ Получено сообщение на \"<b>{_e(title)}</b>\"\n"
         f"<code>{_e(mailbox)}</code>\n"
-        f"от \"<b>{_e(sender_name)}</b>\" <code>{_e(sender_mail)}</code>\n\n"
+        f"от \"<b>{_e(sender_name)}</b>\" <code>{_e(sender_mail)}</code>"
+        f"{product_line}\n"
         f"<b>Тема:</b>\n<blockquote><code>{_e(subject or '—')}</code></blockquote>\n\n"
         f"<b>Текст:</b>\n<blockquote expandable><code>{shown}</code></blockquote>"
     )
@@ -95,7 +97,8 @@ async def loop():
                     title = f"{sender_name} ({own_name})" if own_name else sender_name
                     subject = (letter["subject"] or "(без темы)").strip()
                     body = (letter["body"] or "(пусто)").strip()
-                    text = _card(title, account["email"], sender_name, sender_mail, subject, body)
+                    product = db.sent_offer(letter["from"])
+                    text = _card(title, account["email"], sender_name, sender_mail, subject, body, product)
                     kb = None
                     if letter["from"]:
                         kb = InlineKeyboardMarkup(

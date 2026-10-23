@@ -544,7 +544,7 @@ async def on_send_offer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             asyncio.to_thread(mailer.send_mail, account, to_addr, subject, body, active_proxy(), from_name()),
             timeout=120,
         )
-        db.remember_sent(to_addr)
+        db.remember_sent(to_addr, offer)
     except Exception as exc:
         log.exception("send failed")
         await status.edit_text(f"Не отправилось: {exc}")

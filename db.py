@@ -105,6 +105,7 @@ def init() -> None:
             conn.execute("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''")
             conn.execute("ALTER TABLE inbox ADD COLUMN IF NOT EXISTS tg_message_id BIGINT")
             conn.execute("CREATE TABLE IF NOT EXISTS sent_to (email TEXT PRIMARY KEY)")
+            conn.execute("ALTER TABLE sent_to ADD COLUMN IF NOT EXISTS offer TEXT NOT NULL DEFAULT ''")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS settings (
@@ -173,6 +174,10 @@ def init() -> None:
             pass
         try:
             conn.execute("ALTER TABLE inbox ADD COLUMN tg_message_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE sent_to ADD COLUMN offer TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass
 
@@ -273,11 +278,29 @@ def set_inbox_message(inbox_id: int, message_id: int) -> None:
     _exec("UPDATE inbox SET tg_message_id=? WHERE id=?", (message_id, inbox_id))
 
 
-def remember_sent(email: str) -> None:
+def remember_sent(email: str, offer: str = "") -> None:
     email = (email or "").strip().lower()
+    offer = (offer or "").strip()
     if not email:
         return
-    _exec("INSERT INTO sent_to (email) VALUES (?) ON CONFLICT(email) DO NOTHING", (email,))
+    _exec(
+        """
+        INSERT INTO sent_to (email, offer) VALUES (?, ?)
+        ON CONFLICT(email) DO UPDATE SET
+            offer=CASE WHEN excluded.offer <> '' THEN excluded.offer ELSE sent_to.offer END
+        """,
+        (email, offer),
+    )
+
+
+def sent_offer(email: str) -> str:
+    email = (email or "").strip().lower()
+    if not email:
+        return ""
+    row = _exec("SELECT offer FROM sent_to WHERE email=?", (email,), fetch="one")
+    if not row:
+        return ""
+    return (row["offer"] or "").strip()
 
 
 def was_sent_to(email: str) -> bool:
