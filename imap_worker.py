@@ -84,7 +84,7 @@ async def loop():
     while True:
         for account in db.list_accounts():
             try:
-                new_uid, letters = await asyncio.to_thread(mailer.fetch_new, account, db.get_active_proxy())
+                new_uid, letters = await asyncio.to_thread(mailer.fetch_new, account)
                 if new_uid != account["last_uid"]:
                     db.set_last_uid(account["id"], new_uid)
                 for letter in letters:

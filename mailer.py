@@ -222,11 +222,8 @@ def _decode(value: str | None) -> str:
 
 
 def fetch_new(account, proxy=None) -> tuple[int, list[dict]]:
-    if not proxy:
-        raise RuntimeError("Нет активного прокси. IMAP не подключается напрямую.")
     context = ssl.create_default_context()
-    with via_proxy(proxy):
-        return _fetch_new(account, context)
+    return _fetch_new(account, context)
 
 
 def _fetch_new(account, context) -> tuple[int, list[dict]]:
