@@ -135,8 +135,10 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = db.list_accounts()
         lines = []
         kb = [[InlineKeyboardButton("Добавить логин:пароль", callback_data="acc_add")]]
+        shared = db.get_setting("sender_name").strip()
         for row in rows:
-            name = (row["display_name"] or "").strip() or "имя не задано"
+            own = (row["display_name"] or "").strip()
+            name = own or shared or "имя не задано"
             lines.append(f"{row['id']}. {row['email']} — {name}")
             kb.append([InlineKeyboardButton(f"Имя: {row['email']}", callback_data=f"acc_name:{row['id']}")])
             kb.append([InlineKeyboardButton(f"Удалить {row['email']}", callback_data=f"acc_del:{row['id']}")])
