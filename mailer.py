@@ -145,7 +145,7 @@ def send_mail(account, to_addr: str, subject: str, body: str, proxy=None, sender
     msg["From"] = formataddr((sender_name, account["email"])) if sender_name else account["email"]
     msg["To"] = to_addr
     msg["Subject"] = subject
-    msg.set_content(body)
+    msg.set_content(body, subtype="plain", charset="utf-8", cte="quoted-printable")
 
     context = ssl.create_default_context()
     last_error = None
