@@ -1,9 +1,10 @@
 import asyncio
 import logging
 import os
+from html import escape
 
 from dotenv import load_dotenv
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 import db
 import mailer
@@ -16,57 +17,63 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_ID = int(os.environ["ADMIN_ID"])
 
 
-def _u16(value: str) -> int:
-    return len(value.encode("utf-16-le")) // 2
+def _e(value: str) -> str:
+    return escape(value or "", quote=False)
 
 
-def _card(title, mailbox, sender_name, sender_mail, subject, body):
-    chunks = [
-        f"⚡️ Получено сообщение на \"{title}\"\n",
-        f"{mailbox}\n",
-        f"от \"{sender_name}\" {sender_mail}\n\n",
-        "Тема:\n",
-        subject,
-        "\nТекст:\n",
-        body,
-    ]
-    text = "".join(chunks)
-    if _u16(text) > 4000:
-        text = text.encode("utf-16-le")[:8000].decode("utf-16-le", errors="ignore")
-        body = text[text.rfind("\nТекст:\n") + len("\nТекст:\n"):]
-        subject_at = text.find("Тема:\n") + len("Тема:\n")
-        subject = text[subject_at:text.find("\nТекст:\n")]
-        chunks = [
-            f"⚡️ Получено сообщение на \"{title}\"\n",
-            f"{mailbox}\n",
-            f"от \"{sender_name}\" {sender_mail}\n\n",
-            "Тема:\n",
-            subject,
-            "\nТекст:\n",
-            body,
-        ]
-        text = "".join(chunks)
-    entities = []
-    for chunk in (subject, body):
-        if not chunk:
-            continue
-        entities.append(
-            MessageEntity(
-                MessageEntity.EXPANDABLE_BLOCKQUOTE,
-                _u16_offset(chunks, chunk),
-                _u16(chunk),
-            )
-        )
-    return text, entities
+def _reply_preview(raw: str) -> str:
+    """Новый ответ, затем -------- и процитированное письмо. Строку On/Am/Op wrote не показываем."""
+    txt = (raw or "").replace("\r\n", "\n").replace("\r", "\n")
+    markers = ("\nOn ", "\nAm ", "\nOp ", "\nLe ", "\n-----Original Message-----", "\nFrom:", "\nОт:")
+    cut = None
+    for marker in markers:
+        pos = txt.find(marker)
+        if pos != -1:
+            cut = pos if cut is None else min(cut, pos)
+    seller = txt if cut is None else txt[:cut]
+    seller_lines = []
+    for line in seller.split("\n"):
+        if line.strip().startswith(">") and seller_lines:
+            break
+        seller_lines.append(line)
+    seller = "\n".join(seller_lines).strip()
+    quoted = ""
+    if cut is not None:
+        lines = txt[cut:].split("\n")
+        start = 0
+        for i, line in enumerate(lines):
+            low = line.strip().lower()
+            if not low:
+                continue
+            if any(word in low for word in ("wrote", "schrieb", "schreef", "a écrit", "original message")) or low.startswith(">"):
+                start = i + 1 if not low.startswith(">") else i
+                break
+        buf = []
+        for j in range(start, len(lines)):
+            line = lines[j]
+            low = line.strip().lower()
+            if j != start and (low.startswith(("on ", "am ", "le ", "op ")) or "original message" in low or low.startswith("from:")):
+                break
+            if line.strip().startswith(">"):
+                line = line.lstrip("> ").rstrip()
+            if not line.strip() and buf:
+                break
+            buf.append(line)
+        quoted = "\n".join(buf).strip()
+    if quoted:
+        return f"{seller}\n\n--------\n{quoted}"
+    return seller
 
 
-def _u16_offset(chunks, target) -> int:
-    total = 0
-    for chunk in chunks:
-        if chunk is target:
-            return total
-        total += _u16(chunk)
-    return total
+def _card(title, mailbox, sender_name, sender_mail, subject, body) -> str:
+    shown = _e(_reply_preview(body)[:3200] or "—")
+    return (
+        f"⚡️ Получено сообщение на \"<b>{_e(title)}</b>\"\n"
+        f"<code>{_e(mailbox)}</code>\n"
+        f"от \"<b>{_e(sender_name)}</b>\" <code>{_e(sender_mail)}</code>\n\n"
+        f"<b>Тема:</b>\n<blockquote><code>{_e(subject or '—')}</code></blockquote>\n\n"
+        f"<b>Текст:</b>\n<blockquote expandable><code>{shown}</code></blockquote>"
+    )
 
 
 async def loop():
@@ -88,15 +95,13 @@ async def loop():
                     title = f"{sender_name} ({own_name})" if own_name else sender_name
                     subject = (letter["subject"] or "(без темы)").strip()
                     body = (letter["body"] or "(пусто)").strip()
-                    text, entities = _card(title, account["email"], sender_name, sender_mail, subject, body)
+                    text = _card(title, account["email"], sender_name, sender_mail, subject, body)
                     kb = None
                     if letter["from"]:
                         kb = InlineKeyboardMarkup(
                             [[InlineKeyboardButton("Написать ещё", callback_data=f"write:{inbox_id}")]]
                         )
-                    sent = await bot.send_message(
-                        ADMIN_ID, text, entities=entities, reply_markup=kb
-                    )
+                    sent = await bot.send_message(ADMIN_ID, text, parse_mode="HTML", reply_markup=kb)
                     db.set_inbox_message(inbox_id, sent.message_id)
             except Exception:
                 log.exception("imap %s", account["email"])
